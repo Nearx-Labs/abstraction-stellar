@@ -4,7 +4,11 @@ import { APP_NAME, TESTNET_CONFIG } from './config';
 const statusEl = document.getElementById('status')!;
 const createBtn = document.getElementById('create') as HTMLButtonElement;
 const connectBtn = document.getElementById('connect') as HTMLButtonElement;
+const sendBtn = document.getElementById('send') as HTMLButtonElement;
 const disconnectBtn = document.getElementById('disconnect') as HTMLButtonElement;
+
+// Destinatário do demo (a conta "demo" do stellar CLI).
+const DEMO_RECIPIENT = 'GBKMZQWUCKIGARWNLOQFFMWUJSTY6FAIDT73EZOQK5A5HFGXBBSBE72Z';
 
 const kit = new SmartAccountKit({
   rpcUrl: TESTNET_CONFIG.rpcUrl,
@@ -25,6 +29,7 @@ function setConnected(contractId: string) {
   setStatus(`Conectado.\n\nSmart account:\n${contractId}\n\nRede: testnet`);
   createBtn.hidden = true;
   connectBtn.hidden = true;
+  sendBtn.hidden = false;
   disconnectBtn.hidden = false;
 }
 
@@ -32,6 +37,7 @@ function setDisconnected() {
   setStatus('Desconectado.');
   createBtn.hidden = false;
   connectBtn.hidden = false;
+  sendBtn.hidden = true;
   disconnectBtn.hidden = true;
 }
 
@@ -58,6 +64,25 @@ connectBtn.addEventListener('click', async () => {
     }
   } catch (err) {
     setStatus(`Erro ao conectar: ${err instanceof Error ? err.message : err}`);
+  }
+});
+
+sendBtn.addEventListener('click', async () => {
+  try {
+    setStatus('Assinando com a passkey e submetendo via relayer patrocinado…');
+    const result = await kit.transfer(TESTNET_CONFIG.xlmSacAddress, DEMO_RECIPIENT, 1);
+    if (result.success) {
+      setStatus(
+        `✅ 1 XLM enviado — fee paga pelo sponsor, não pelo usuário.\n\n` +
+          `Hash: ${result.hash ?? '(via relayer)'}\n\n` +
+          `Quota e débito auditável no Treasury:\n` +
+          `${TESTNET_CONFIG.treasuryContractId}`,
+      );
+    } else {
+      setStatus(`Transferência recusada: [${result.error.code}] ${result.error.message}`);
+    }
+  } catch (err) {
+    setStatus(`Erro na transferência: ${err instanceof Error ? err.message : err}`);
   }
 });
 

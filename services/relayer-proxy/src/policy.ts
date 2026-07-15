@@ -59,6 +59,10 @@ export function enforcePolicy(
 ): void {
   if (policy.targetAllowlist.size > 0) {
     for (const target of targets) {
+      // A smart account invocando a si mesma (execute/admin) é sempre
+      // patrocinável — o gate real é a allowance por usuário; a allowlist
+      // vale para contratos externos chamados diretamente.
+      if (target === user) continue;
       if (!policy.targetAllowlist.has(target)) {
         throw new PolicyError(`alvo ${target} não é patrocinável`, 'UNAUTHORIZED');
       }

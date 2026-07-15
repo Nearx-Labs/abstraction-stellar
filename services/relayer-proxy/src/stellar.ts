@@ -129,9 +129,12 @@ export async function submitFeeBump(
     throw new Error('a transação já é fee-bump');
   }
 
+  // A base fee do fee-bump precisa cobrir a fee interna (que em Soroban
+  // inclui a resource fee) — calcula a partir da própria transação.
+  const baseFee = process.env.FEE_BUMP_BASE_FEE ?? (BigInt(inner.fee) + 200n).toString();
   const feeBump = TransactionBuilder.buildFeeBumpTransaction(
     payer,
-    process.env.FEE_BUMP_BASE_FEE ?? '1000',
+    baseFee,
     inner,
     NETWORK_PASSPHRASE,
   );
