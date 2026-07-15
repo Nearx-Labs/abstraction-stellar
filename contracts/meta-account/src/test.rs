@@ -492,6 +492,203 @@ fn session_key_cannot_administer_account() {
     assert!(session_transfer_result(&e, &setup, &account, 10).is_err());
 }
 
+// ---------------------------------------------------------------------------
+// Fase 5: recovery — guardians + threshold + timelock + cooldown
+// ---------------------------------------------------------------------------
+
+use crate::recovery::{RecoveryError, RecoveryPolicy};
+
+const TIMELOCK: u64 = 3_600;
+const COOLDOWN: u64 = 86_400;
+
+struct RecoverySetup {
+    account: Address,
+    guardians: std::vec::Vec<Address>,
+    new_signer: Signer,
+    new_key: SigningKey,
+}
+
+fn recovery_error(code: RecoveryError) -> soroban_sdk::Error {
+    soroban_sdk::Error::from_contract_error(code as u32)
+}
+
+/// Conta com passkey/ed25519 na regra Default e policy 2-de-3 guardians.
+fn setup_recovery_account(e: &Env) -> RecoverySetup {
+    e.ledger().with_mut(|l| {
+        l.timestamp = NOW;
+        l.min_persistent_entry_ttl = 100_000;
+        l.max_entry_ttl = 1_000_000;
+    });
+    e.mock_all_auths();
+
+    let ed_verifier = e.register(Ed25519VerifierContract, ());
+    let (primary_signer, _) = ed25519_signer(e, &ed_verifier, 7);
+    let account =
+        e.register(MetaAccount, (vec![e, primary_signer], Map::<Address, Val>::new(e)));
+
+    let guardians: std::vec::Vec<Address> =
+        (0..3).map(|_| Address::generate(e)).collect();
+    let client = MetaAccountClient::new(e, &account);
+    client.set_recovery_policy(&RecoveryPolicy {
+        guardians: Vec::from_array(
+            e,
+            [guardians[0].clone(), guardians[1].clone(), guardians[2].clone()],
+        ),
+        threshold: 2,
+        timelock_secs: TIMELOCK,
+        cooldown_secs: COOLDOWN,
+    });
+
+    // O device novo do usuário (a passkey que substituirá a perdida).
+    let (new_signer, new_key) = ed25519_signer(e, &ed_verifier, 33);
+
+    RecoverySetup { account, guardians, new_signer, new_key }
+}
+
+#[test]
+fn full_recovery_flow_restores_control() {
+    let e = Env::default();
+    let s = setup_recovery_account(&e);
+    let client = MetaAccountClient::new(&e, &s.account);
+
+    let id = client.start_recovery(&s.guardians[0], &s.new_signer);
+
+    // Quórum ainda não atingido.
+    let res = client.try_finalize_recovery(&id);
+    assert_eq!(res, Err(Ok(recovery_error(RecoveryError::ThresholdNotMet))));
+
+    assert_eq!(client.approve_recovery(&id, &s.guardians[1]), 2);
+
+    // Timelock ainda vigente.
+    let res = client.try_finalize_recovery(&id);
+    assert_eq!(res, Err(Ok(recovery_error(RecoveryError::TimelockNotExpired))));
+
+    e.ledger().with_mut(|l| l.timestamp = NOW + TIMELOCK + 1);
+    let new_rule_id = client.finalize_recovery(&id);
+
+    // O novo device efetivamente autoriza pela nova regra Default.
+    let signature_payload = BytesN::<32>::random(&e);
+    let context_rule_ids = vec![&e, new_rule_id];
+    let sig = sign_auth_digest(&e, &s.new_key, &signature_payload, &context_rule_ids);
+    let auth_payload = AuthPayload {
+        signers: map![&e, (s.new_signer.clone(), sig)],
+        context_rule_ids,
+    };
+    let auth_contexts = vec![
+        &e,
+        Context::Contract(ContractContext {
+            contract: Address::generate(&e),
+            fn_name: symbol_short!("transfer"),
+            args: vec![&e],
+        }),
+    ];
+    let result = e.try_invoke_contract_check_auth::<SmartAccountError>(
+        &s.account,
+        &signature_payload,
+        auth_payload.into_val(&e),
+        &auth_contexts,
+    );
+    assert!(result.is_ok());
+}
+
+#[test]
+fn owner_veto_cancels_takeover() {
+    let e = Env::default();
+    let s = setup_recovery_account(&e);
+    let client = MetaAccountClient::new(&e, &s.account);
+
+    let id = client.start_recovery(&s.guardians[0], &s.new_signer);
+    client.approve_recovery(&id, &s.guardians[1]);
+
+    // Dono ainda tem um device: veta (auth da conta, mockada aqui).
+    client.cancel_recovery(&id);
+
+    e.ledger().with_mut(|l| l.timestamp = NOW + TIMELOCK + 1);
+    let res = client.try_finalize_recovery(&id);
+    assert_eq!(res, Err(Ok(recovery_error(RecoveryError::RecoveryNotFound))));
+}
+
+#[test]
+fn non_guardian_cannot_start_or_approve() {
+    let e = Env::default();
+    let s = setup_recovery_account(&e);
+    let client = MetaAccountClient::new(&e, &s.account);
+
+    let intruder = Address::generate(&e);
+    let res = client.try_start_recovery(&intruder, &s.new_signer);
+    assert_eq!(res, Err(Ok(recovery_error(RecoveryError::NotGuardian))));
+
+    let id = client.start_recovery(&s.guardians[0], &s.new_signer);
+    let res = client.try_approve_recovery(&id, &intruder);
+    assert_eq!(res, Err(Ok(recovery_error(RecoveryError::NotGuardian))));
+}
+
+#[test]
+fn duplicate_approval_rejected() {
+    let e = Env::default();
+    let s = setup_recovery_account(&e);
+    let client = MetaAccountClient::new(&e, &s.account);
+
+    let id = client.start_recovery(&s.guardians[0], &s.new_signer);
+    let res = client.try_approve_recovery(&id, &s.guardians[0]);
+    assert_eq!(res, Err(Ok(recovery_error(RecoveryError::AlreadyApproved))));
+}
+
+#[test]
+fn concurrent_recovery_blocked() {
+    let e = Env::default();
+    let s = setup_recovery_account(&e);
+    let client = MetaAccountClient::new(&e, &s.account);
+
+    client.start_recovery(&s.guardians[0], &s.new_signer);
+    let res = client.try_start_recovery(&s.guardians[1], &s.new_signer);
+    assert_eq!(res, Err(Ok(recovery_error(RecoveryError::RecoveryAlreadyActive))));
+}
+
+#[test]
+fn cooldown_blocks_immediate_second_recovery() {
+    let e = Env::default();
+    let s = setup_recovery_account(&e);
+    let client = MetaAccountClient::new(&e, &s.account);
+
+    let id = client.start_recovery(&s.guardians[0], &s.new_signer);
+    client.approve_recovery(&id, &s.guardians[1]);
+    e.ledger().with_mut(|l| l.timestamp = NOW + TIMELOCK + 1);
+    client.finalize_recovery(&id);
+
+    // Logo depois do finalize: cooldown ativo.
+    let res = client.try_start_recovery(&s.guardians[0], &s.new_signer);
+    assert_eq!(res, Err(Ok(recovery_error(RecoveryError::CooldownActive))));
+
+    // Cooldown vencido: novo recovery pode começar.
+    e.ledger().with_mut(|l| l.timestamp = NOW + TIMELOCK + 1 + COOLDOWN);
+    assert_eq!(client.start_recovery(&s.guardians[0], &s.new_signer), 1);
+}
+
+#[test]
+fn invalid_recovery_policy_rejected() {
+    let e = Env::default();
+    let s = setup_recovery_account(&e);
+    let client = MetaAccountClient::new(&e, &s.account);
+
+    let guardians = Vec::from_array(&e, [s.guardians[0].clone()]);
+    let res = client.try_set_recovery_policy(&RecoveryPolicy {
+        guardians: guardians.clone(),
+        threshold: 0,
+        timelock_secs: TIMELOCK,
+        cooldown_secs: COOLDOWN,
+    });
+    assert_eq!(res, Err(Ok(recovery_error(RecoveryError::InvalidPolicy))));
+
+    let res = client.try_set_recovery_policy(&RecoveryPolicy {
+        guardians,
+        threshold: 2,
+        timelock_secs: TIMELOCK,
+        cooldown_secs: COOLDOWN,
+    });
+    assert_eq!(res, Err(Ok(recovery_error(RecoveryError::InvalidPolicy))));
+}
+
 #[test]
 fn check_auth_from_unregistered_signer_fails() {
     let e = Env::default();

@@ -27,6 +27,8 @@ use stellar_accounts::smart_account::{
 };
 use stellar_contract_utils::upgradeable::{self, Upgradeable};
 
+use crate::recovery;
+
 #[contract]
 pub struct MetaAccount;
 
@@ -59,6 +61,46 @@ impl MetaAccount {
         e.current_contract_address().require_auth();
 
         smart_account::batch_add_signer(e, context_rule_id, &signers);
+    }
+
+    // ------------------------------------------------------------------
+    // Recovery (Fase 5) — ver src/recovery.rs para o desenho completo.
+    // ------------------------------------------------------------------
+
+    /// Define guardians/threshold/timelock/cooldown. Step-up: exige auth da
+    /// conta (passkey), nunca email ou session key sozinhos — regras
+    /// `CallContract` não autorizam chamadas à própria conta.
+    pub fn set_recovery_policy(e: &Env, policy: recovery::RecoveryPolicy) {
+        recovery::set_recovery_policy(e, policy);
+    }
+
+    pub fn get_recovery_policy(e: &Env) -> Option<recovery::RecoveryPolicy> {
+        recovery::get_recovery_policy(e)
+    }
+
+    pub fn get_active_recovery(e: &Env) -> Option<recovery::RecoveryState> {
+        recovery::get_active_recovery(e)
+    }
+
+    /// Guardian inicia recovery propondo o novo autenticador.
+    pub fn start_recovery(e: &Env, guardian: Address, new_signer: Signer) -> u32 {
+        recovery::start_recovery(e, guardian, new_signer)
+    }
+
+    /// Aprovação adicional de guardian rumo ao quórum.
+    pub fn approve_recovery(e: &Env, recovery_id: u32, guardian: Address) -> u32 {
+        recovery::approve_recovery(e, recovery_id, guardian)
+    }
+
+    /// Veto do dono: qualquer autenticador vivo cancela a tentativa.
+    pub fn cancel_recovery(e: &Env, recovery_id: u32) {
+        recovery::cancel_recovery(e, recovery_id);
+    }
+
+    /// Permissionless após quórum + timelock: instala o novo signer numa
+    /// nova regra `Default`, devolvendo o controle da conta.
+    pub fn finalize_recovery(e: &Env, recovery_id: u32) -> u32 {
+        recovery::finalize_recovery(e, recovery_id)
     }
 }
 

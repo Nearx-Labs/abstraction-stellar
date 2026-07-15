@@ -117,6 +117,24 @@ on-chain, todos aplicados em `__check_auth`:
 O cliente ([session.ts](client/src/session.ts)) expõe `grantSession` (um
 prompt de passkey), `transferWithSession` (zero prompts) e `revokeSession`.
 
+## Recovery e multi-device (Fase 5)
+
+Sem seed phrase, a perda de devices precisa de dois planos:
+
+1. **Multi-device (primeira linha)** — registrar mais de uma passkey na
+   regra Default (`add_signer`/`batch_add_signer`). Perdeu um device, entra
+   com o outro.
+2. **Guardians + timelock ([recovery.rs](contracts/meta-account/src/recovery.rs))**
+   — quórum de guardians (Addresses: amigos, outra conta sua, ou um serviço
+   institucional; usar o auth-issuer como guardian dá "email recovery com
+   delay" compondo com a Fase 2) aprova a instalação de um novo
+   autenticador. O `finalize` só executa após o timelock, é permissionless
+   e cria uma **nova** regra Default — não depende do estado da regra
+   perdida. Durante o timelock, **qualquer autenticador vivo da conta veta**
+   (`cancel_recovery`): quem ainda tem um device sempre vence um takeover.
+   Cooldown pós-recovery limita tentativas em sequência. Guardians nunca
+   movimentam fundos — só reinstalam autenticadores, com tudo em eventos.
+
 ## Roadmap
 
 1. **Fase 1** — MetaAccount + passkey + cliente web. ✅
@@ -126,7 +144,8 @@ prompt de passkey), `transferWithSession` (zero prompts) e `revokeSession`.
    quotas auditáveis) + relayer-proxy com policy na frente da submissão. ✅
 4. **Fase 4** — session keys como context rules `CallContract` com
    `valid_until` curto e spending-limit policy. ✅
-5. **Fase 5** — recovery: guardians + timelock + step-up auth.
+5. **Fase 5** — recovery: guardians + threshold + timelock + veto do dono +
+   cooldown; multi-device como primeira linha. ✅
 
 [`stellar-accounts`]: https://github.com/OpenZeppelin/stellar-contracts
 [`smart-account-kit`]: https://github.com/kalepail/smart-account-kit
