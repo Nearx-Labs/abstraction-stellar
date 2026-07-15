@@ -13,11 +13,12 @@ export const TESTNET_CONFIG = {
   accountWasmHash: '1b5f4534a76322da2ad7c745f6900857a6802b0ca79850c35a03561df997785a',
   webauthnVerifierAddress: 'CC7EKIHQP3TN4CARQDND6CEOY2UXLWWC2X5GHTD5NLAT7BG5GPZIOM3F',
   ed25519VerifierAddress: 'CAAVTMCBXEIBPR64EAASKFXERVPYFZA2JYP5A3BG6PESWEFUJX5IHKN4',
-  // Fase 3: aponte para o OpenZeppelin Relayer (Stellar Channels Service)
-  // para transações patrocinadas. Instância testnet hospedada:
-  // https://channels.openzeppelin.com/testnet (API key em /gen), passada
-  // via relayerUrl + proxy próprio quando houver policy de quota.
-  relayerUrl: undefined as string | undefined,
+  // Fase 3 — transações patrocinadas via services/relayer-proxy (policy de
+  // quota/allowlist na frente da submissão). Rode `npm run dev` no proxy e o
+  // kit passa a usar este endpoint para tudo (usuário não paga fee). Em
+  // produção, o proxy encaminha para o OZ Channels
+  // (https://channels.openzeppelin.com/testnet) via CHANNELS_URL/API_KEY.
+  relayerUrl: 'http://localhost:8787' as string | undefined,
 
   // Fase 2 — email attestation. Faça o deploy do verificador deste repo:
   //   stellar contract build

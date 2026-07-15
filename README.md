@@ -32,9 +32,35 @@ contracts/
   webauthn-verifier/           # verificador de assertions WebAuthn (passkey)
   ed25519-verifier/            # verificador Ed25519 (fallback/admin/dev)
   email-attestation-verifier/  # verificador de attestations de email (Fase 2)
+  treasury/                    # policy on-chain do paymaster (Fase 3)
 client/                        # web app (Vite + TS + smart-account-kit)
 services/
   auth-issuer/                 # emissor off-chain de attestations (OTP por email)
+  relayer-proxy/               # submissão patrocinada com policy (Fase 3)
+```
+
+## Fee abstraction (Fase 3)
+
+Modelo híbrido, sponsor-pays: o usuário nunca toca em XLM.
+
+- **On-chain ([treasury](contracts/treasury/src/contract.rs))** — a camada
+  declarativa/auditável: orçamento do sponsor em token SEP-41, allowlist de
+  contratos patrocináveis e allowance por usuário (`max_per_tx`,
+  `max_per_day`, expiração). O relayer é o `operator` e debita cada
+  patrocínio via `consume`, que emite evento — o gasto é público.
+- **Off-chain ([relayer-proxy](services/relayer-proxy/src/index.ts))** — o
+  enforcement operacional: simula custo, aplica allowlist + teto por tx +
+  quota diária em memória, então paga a transação (monta a partir de
+  `{func, auth}` ou envelopa `{xdr}` assinado em fee-bump). Compatível com o
+  protocolo `relayerUrl` do smart-account-kit. Com `TREASURY_CONTRACT_ID`
+  definido, debita o consumo on-chain (payer = operator); com
+  `CHANNELS_URL`/`CHANNELS_API_KEY`, encaminha a submissão ao OpenZeppelin
+  Relayer mantendo a policy na frente.
+
+```bash
+cd services/relayer-proxy && npm install && npm run dev   # proxy em :8787
+# env: FEE_PAYER_SECRET, TARGET_ALLOWLIST, MAX_FEE_PER_TX, MAX_FEE_PER_DAY,
+#      TREASURY_CONTRACT_ID, CHANNELS_URL, CHANNELS_API_KEY
 ```
 
 ## Email como authenticator (Fase 2)
@@ -80,9 +106,8 @@ implantados no testnet (Protocol 27). Para usar o WASM deste repositório, faça
 1. **Fase 1** — MetaAccount + passkey + cliente web. ✅
 2. **Fase 2** — email como attestation off-chain assinada (issuer service),
    verificada em `__check_auth`, com challenge = auth digest da transação. ✅
-3. **Fase 3** — treasury/paymaster: policy de quota on-chain
-   (`stellar-fee-abstraction`) + OpenZeppelin Relayer self-hosted com camada
-   de anti-abuse.
+3. **Fase 3** — treasury/paymaster híbrido: contrato Treasury (orçamento +
+   quotas auditáveis) + relayer-proxy com policy na frente da submissão. ✅
 4. **Fase 4** — session keys como context rules `CallContract` com
    `valid_until` curto e spending-limit policy.
 5. **Fase 5** — recovery: guardians + timelock + step-up auth.

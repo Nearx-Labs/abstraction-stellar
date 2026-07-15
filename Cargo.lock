@@ -1615,6 +1615,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
+name = "stellar-access"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5aae4c50000565b08e97241a06cfb2cff4c3dfde12bdafa0b5303aca22139f38"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "stellar-accounts"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1772,6 +1781,15 @@ name = "tinyvec_macros"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
+
+[[package]]
+name = "treasury"
+version = "0.0.0"
+dependencies = [
+ "soroban-sdk",
+ "stellar-access",
+ "stellar-macros",
+]
 
 [[package]]
 name = "typenum"
