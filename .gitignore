@@ -1,0 +1,16 @@
+# Rust's output directory
+target
+
+# Local settings
+.soroban
+.stellar
+
+# Generated test snapshots
+test_snapshots/
+
+# Client
+node_modules
+dist
+.env
+.env.local
+.DS_Store
