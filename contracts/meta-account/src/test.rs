@@ -13,6 +13,8 @@ use soroban_sdk::{
     xdr::ToXdr,
     Address, Bytes, BytesN, Env, IntoVal, Map, String, TryFromVal, Val, Vec,
 };
+use spending_limit_policy::SpendingLimitPolicyContract;
+use stellar_accounts::policies::spending_limit::SpendingLimitAccountParams;
 use stellar_accounts::smart_account::{AuthPayload, ContextRuleType, Signer, SmartAccountError};
 
 use crate::contract::{MetaAccount, MetaAccountClient};
@@ -331,6 +333,163 @@ fn email_attestation_bound_to_other_tx_fails() {
     let target = setup.target.clone();
     let result = email_auth_result(&e, &setup, &target, &signed_for, &presented, NOW + 300);
     assert!(result.is_err());
+}
+
+// ---------------------------------------------------------------------------
+// Fase 4: session keys — regra CallContract com valid_until + spending limit
+// ---------------------------------------------------------------------------
+
+const START_SEQ: u32 = 1_000;
+const SESSION_TTL_LEDGERS: u32 = 100;
+const SESSION_SPEND_LIMIT: i128 = 500;
+
+struct SessionSetup {
+    account: Address,
+    target: Address,
+    session_signer: Signer,
+    session_key: SigningKey,
+    rule_id: u32,
+}
+
+/// Conta com signer primário na regra Default e uma session key efêmera numa
+/// regra `CallContract(target)` com expiração por ledger e spending limit.
+fn setup_session_account(e: &Env) -> SessionSetup {
+    e.ledger().with_mut(|l| {
+        l.timestamp = NOW;
+        l.sequence_number = START_SEQ;
+        // Sessões expiram por ledger; mantém entradas persistentes vivas.
+        l.min_persistent_entry_ttl = 100_000;
+        l.max_entry_ttl = 1_000_000;
+    });
+    e.mock_all_auths();
+
+    let ed_verifier = e.register(Ed25519VerifierContract, ());
+    let policy = e.register(SpendingLimitPolicyContract, ());
+
+    let (primary_signer, _) = ed25519_signer(e, &ed_verifier, 7);
+    let account =
+        e.register(MetaAccount, (vec![e, primary_signer], Map::<Address, Val>::new(e)));
+
+    // Chave efêmera gerada no cliente após login forte com passkey.
+    let (session_signer, session_key) = ed25519_signer(e, &ed_verifier, 21);
+
+    let target = Address::generate(e);
+    let client = MetaAccountClient::new(e, &account);
+    let rule = client.add_context_rule(
+        &ContextRuleType::CallContract(target.clone()),
+        &String::from_str(e, "session"),
+        &Some(START_SEQ + SESSION_TTL_LEDGERS),
+        &vec![e, session_signer.clone()],
+        &map![
+            e,
+            (
+                policy,
+                SpendingLimitAccountParams {
+                    spending_limit: SESSION_SPEND_LIMIT,
+                    period_ledgers: SESSION_TTL_LEDGERS,
+                }
+                .into_val(e)
+            )
+        ],
+    );
+
+    SessionSetup { account, target, session_signer, session_key, rule_id: rule.id }
+}
+
+/// Tenta autorizar `transfer(account, to, amount)` no alvo com a session key.
+fn session_transfer_result(
+    e: &Env,
+    setup: &SessionSetup,
+    call_target: &Address,
+    amount: i128,
+) -> Result<(), Result<SmartAccountError, soroban_sdk::InvokeError>> {
+    let signature_payload = BytesN::<32>::random(e);
+    let context_rule_ids = vec![e, setup.rule_id];
+    let sig = sign_auth_digest(e, &setup.session_key, &signature_payload, &context_rule_ids);
+
+    let auth_payload = AuthPayload {
+        signers: map![e, (setup.session_signer.clone(), sig)],
+        context_rule_ids,
+    };
+    let recipient = Address::generate(e);
+    let auth_contexts = vec![
+        e,
+        Context::Contract(ContractContext {
+            contract: call_target.clone(),
+            fn_name: symbol_short!("transfer"),
+            args: vec![
+                e,
+                setup.account.clone().into_val(e),
+                recipient.into_val(e),
+                amount.into_val(e),
+            ],
+        }),
+    ];
+
+    e.try_invoke_contract_check_auth::<SmartAccountError>(
+        &setup.account,
+        &signature_payload,
+        auth_payload.into_val(e),
+        &auth_contexts,
+    )
+}
+
+#[test]
+fn session_key_authorizes_within_spending_limit() {
+    let e = Env::default();
+    let setup = setup_session_account(&e);
+
+    let target = setup.target.clone();
+    assert!(session_transfer_result(&e, &setup, &target, 300).is_ok());
+    assert!(session_transfer_result(&e, &setup, &target, 200).is_ok());
+    // 300 + 200 esgotou o limite de 500 na janela.
+    assert!(session_transfer_result(&e, &setup, &target, 1).is_err());
+}
+
+#[test]
+fn session_single_transfer_over_limit_fails() {
+    let e = Env::default();
+    let setup = setup_session_account(&e);
+
+    let target = setup.target.clone();
+    assert!(session_transfer_result(&e, &setup, &target, SESSION_SPEND_LIMIT + 1).is_err());
+}
+
+#[test]
+fn session_rule_expires_by_ledger() {
+    let e = Env::default();
+    let setup = setup_session_account(&e);
+
+    let target = setup.target.clone();
+    assert!(session_transfer_result(&e, &setup, &target, 10).is_ok());
+
+    // Passou do valid_until: a sessão morre sozinha, sem revogação.
+    e.ledger().with_mut(|l| l.sequence_number = START_SEQ + SESSION_TTL_LEDGERS + 1);
+    assert!(session_transfer_result(&e, &setup, &target, 10).is_err());
+}
+
+#[test]
+fn session_rule_can_be_revoked() {
+    let e = Env::default();
+    let setup = setup_session_account(&e);
+
+    let target = setup.target.clone();
+    assert!(session_transfer_result(&e, &setup, &target, 10).is_ok());
+
+    let client = MetaAccountClient::new(&e, &setup.account);
+    client.remove_context_rule(&setup.rule_id);
+    assert!(session_transfer_result(&e, &setup, &target, 10).is_err());
+}
+
+#[test]
+fn session_key_cannot_administer_account() {
+    let e = Env::default();
+    let setup = setup_session_account(&e);
+
+    // Tenta autorizar uma operação administrativa (na própria conta) com a
+    // regra de sessão: contexto não bate com CallContract(target).
+    let account = setup.account.clone();
+    assert!(session_transfer_result(&e, &setup, &account, 10).is_err());
 }
 
 #[test]

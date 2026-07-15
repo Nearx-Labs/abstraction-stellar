@@ -971,6 +971,7 @@ dependencies = [
  "ed25519-verifier",
  "email-attestation-verifier",
  "soroban-sdk",
+ "spending-limit-policy",
  "stellar-accounts",
  "stellar-contract-utils",
  "stellar-macros",
@@ -1584,6 +1585,14 @@ dependencies = [
  "wasmi_arena",
  "wasmi_core",
  "wasmparser-nostd",
+]
+
+[[package]]
+name = "spending-limit-policy"
+version = "0.0.0"
+dependencies = [
+ "soroban-sdk",
+ "stellar-accounts",
 ]
 
 [[package]]

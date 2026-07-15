@@ -28,6 +28,11 @@ export const TESTNET_CONFIG = {
   // e cole o C-address aqui. O serviço emissor roda em services/auth-issuer.
   emailVerifierAddress: 'CEMAIL_VERIFIER_NOT_DEPLOYED_YET',
   authIssuerUrl: 'http://localhost:8788',
+
+  // Fase 4 — session keys. Spending-limit policy oficial do smart-account-kit
+  // no testnet (Protocol 27); para usar a deste repo, faça o deploy de
+  // spending_limit_policy.wasm e troque o endereço.
+  spendingLimitPolicyAddress: 'CABXBYJNZ7IUW4G3D6BND5YCAQF3ASSDMDAOKQQ63UYFSO7WUU2TIP5G',
 };
 
 export const APP_NAME = 'Abstraction';

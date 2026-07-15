@@ -33,6 +33,7 @@ contracts/
   ed25519-verifier/            # verificador Ed25519 (fallback/admin/dev)
   email-attestation-verifier/  # verificador de attestations de email (Fase 2)
   treasury/                    # policy on-chain do paymaster (Fase 3)
+  spending-limit-policy/       # teto de gasto em janela deslizante (Fase 4)
 client/                        # web app (Vite + TS + smart-account-kit)
 services/
   auth-issuer/                 # emissor off-chain de attestations (OTP por email)
@@ -101,6 +102,21 @@ O cliente vem configurado com os contratos oficiais do smart-account-kit já
 implantados no testnet (Protocol 27). Para usar o WASM deste repositório, faça
 `stellar contract upload` e troque `accountWasmHash` em `client/src/config.ts`.
 
+## Session keys (Fase 4)
+
+Depois de um login forte com passkey, a conta autoriza uma chave Ed25519
+efêmera (memória do browser, sem persistência) com três guarda-corpos
+on-chain, todos aplicados em `__check_auth`:
+
+- **Escopo**: context rule `CallContract(alvo)` — a sessão só fala com um
+  contrato e, por construção, não administra a conta;
+- **Expiração**: `valid_until` em ledgers — a sessão morre sozinha;
+- **Valor**: [spending-limit-policy](contracts/spending-limit-policy/src/contract.rs)
+  — teto de gasto em janela deslizante de ledgers.
+
+O cliente ([session.ts](client/src/session.ts)) expõe `grantSession` (um
+prompt de passkey), `transferWithSession` (zero prompts) e `revokeSession`.
+
 ## Roadmap
 
 1. **Fase 1** — MetaAccount + passkey + cliente web. ✅
@@ -109,7 +125,7 @@ implantados no testnet (Protocol 27). Para usar o WASM deste repositório, faça
 3. **Fase 3** — treasury/paymaster híbrido: contrato Treasury (orçamento +
    quotas auditáveis) + relayer-proxy com policy na frente da submissão. ✅
 4. **Fase 4** — session keys como context rules `CallContract` com
-   `valid_until` curto e spending-limit policy.
+   `valid_until` curto e spending-limit policy. ✅
 5. **Fase 5** — recovery: guardians + timelock + step-up auth.
 
 [`stellar-accounts`]: https://github.com/OpenZeppelin/stellar-contracts
