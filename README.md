@@ -28,10 +28,32 @@ de downgrade de regra.
 
 ```
 contracts/
-  meta-account/        # a smart account (CustomAccountInterface + SmartAccount)
-  webauthn-verifier/   # verificador de assertions WebAuthn (passkey)
-  ed25519-verifier/    # verificador Ed25519 (fallback/admin/dev)
-client/                # web app (Vite + TS + smart-account-kit)
+  meta-account/                # a smart account (CustomAccountInterface + SmartAccount)
+  webauthn-verifier/           # verificador de assertions WebAuthn (passkey)
+  ed25519-verifier/            # verificador Ed25519 (fallback/admin/dev)
+  email-attestation-verifier/  # verificador de attestations de email (Fase 2)
+client/                        # web app (Vite + TS + smart-account-kit)
+services/
+  auth-issuer/                 # emissor off-chain de attestations (OTP por email)
+```
+
+## Email como authenticator (Fase 2)
+
+Nada de JWT on-chain: o `auth-issuer` valida o email (OTP) e emite uma
+attestation Ed25519 curta cujo `challenge` é o **auth digest exato da
+transação** — replay em outra transação, rede ou seleção de regra é inválido
+por construção, herdando o anti-replay do protocolo. O
+`email-attestation-verifier` verifica assinatura do issuer, subject, challenge
+e expiração.
+
+Regra de ouro: o email signer entra numa context rule `CallContract(alvo)`
+separada — nunca na regra `Default` — então email sozinho não administra a
+conta nem autoriza outros contratos (step-up com passkey continua obrigatório
+para operações sensíveis).
+
+```bash
+cd services/auth-issuer && npm install && npm run dev   # emissor em :8788
+npm run fixture   # regenera o vetor cross-language dos testes Rust
 ```
 
 ## Desenvolvimento
@@ -55,9 +77,9 @@ implantados no testnet (Protocol 27). Para usar o WASM deste repositório, faça
 
 ## Roadmap
 
-1. **Fase 1 (este repo)** — MetaAccount + passkey + cliente web. ✅
+1. **Fase 1** — MetaAccount + passkey + cliente web. ✅
 2. **Fase 2** — email como attestation off-chain assinada (issuer service),
-   verificada em `__check_auth` com nonce/TTL/audience próprios.
+   verificada em `__check_auth`, com challenge = auth digest da transação. ✅
 3. **Fase 3** — treasury/paymaster: policy de quota on-chain
    (`stellar-fee-abstraction`) + OpenZeppelin Relayer self-hosted com camada
    de anti-abuse.

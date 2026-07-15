@@ -2,15 +2,18 @@ extern crate std;
 
 use ed25519_dalek::{Signer as _, SigningKey};
 use ed25519_verifier::Ed25519VerifierContract;
+use email_attestation_verifier::{
+    attestation_message, EmailAttestation, EmailAttestationVerifierContract,
+};
 use soroban_sdk::{
     auth::{Context, ContractContext},
     contract, contractimpl, map, symbol_short,
-    testutils::{Address as _, BytesN as _},
+    testutils::{Address as _, BytesN as _, Ledger as _},
     vec,
     xdr::ToXdr,
-    Address, Bytes, BytesN, Env, IntoVal, Map, TryFromVal, Val, Vec,
+    Address, Bytes, BytesN, Env, IntoVal, Map, String, TryFromVal, Val, Vec,
 };
-use stellar_accounts::smart_account::{AuthPayload, Signer, SmartAccountError};
+use stellar_accounts::smart_account::{AuthPayload, ContextRuleType, Signer, SmartAccountError};
 
 use crate::contract::{MetaAccount, MetaAccountClient};
 
@@ -165,6 +168,168 @@ fn check_auth_with_tampered_signature_fails() {
         auth_payload.into_val(&e),
         &auth_contexts,
     );
+    assert!(result.is_err());
+}
+
+// ---------------------------------------------------------------------------
+// Fase 2: email attestation como authenticator em regra CallContract separada
+// ---------------------------------------------------------------------------
+
+const NOW: u64 = 1_800_000_000;
+
+/// Digest que o issuer usa como challenge:
+/// `sha256(signature_payload || context_rule_ids.to_xdr())`.
+fn auth_digest(e: &Env, signature_payload: &BytesN<32>, context_rule_ids: &Vec<u32>) -> BytesN<32> {
+    let mut preimage = Bytes::from_array(e, &signature_payload.to_array());
+    preimage.append(&context_rule_ids.clone().to_xdr(e));
+    e.crypto().sha256(&preimage).to_bytes()
+}
+
+fn email_key_data(e: &Env, issuer: &SigningKey, subject_hash: &BytesN<32>) -> Bytes {
+    let mut kd = Bytes::from_array(e, &issuer.verifying_key().to_bytes());
+    kd.append(&subject_hash.to_bytes().into());
+    kd
+}
+
+fn issue_attestation(
+    e: &Env,
+    issuer: &SigningKey,
+    subject_hash: &BytesN<32>,
+    challenge: &BytesN<32>,
+    expires_at: u64,
+) -> Bytes {
+    let message = attestation_message(e, subject_hash, challenge, expires_at);
+    let mut msg_buf = std::vec![0u8; message.len() as usize];
+    message.copy_into_slice(&mut msg_buf);
+    let signature = issuer.sign(&msg_buf);
+
+    EmailAttestation {
+        subject_hash: subject_hash.clone(),
+        challenge: challenge.clone(),
+        expires_at,
+        signature: BytesN::from_array(e, &signature.to_bytes()),
+    }
+    .to_xdr(e)
+}
+
+struct EmailSetup {
+    account: Address,
+    target: Address,
+    email_signer: Signer,
+    issuer: SigningKey,
+    subject_hash: BytesN<32>,
+    email_rule_id: u32,
+}
+
+/// Conta com passkey/ed25519 na regra Default (id 0) e um email signer numa
+/// regra restrita a `CallContract(target)` (id 1) — email sozinho não
+/// administra a conta.
+fn setup_email_account(e: &Env) -> EmailSetup {
+    e.ledger().with_mut(|l| l.timestamp = NOW);
+    e.mock_all_auths();
+
+    let ed_verifier = e.register(Ed25519VerifierContract, ());
+    let email_verifier = e.register(EmailAttestationVerifierContract, ());
+
+    let (primary_signer, _) = ed25519_signer(e, &ed_verifier, 7);
+    let account =
+        e.register(MetaAccount, (vec![e, primary_signer], Map::<Address, Val>::new(e)));
+
+    let issuer = SigningKey::from_bytes(&[42u8; 32]);
+    let subject_hash = BytesN::from_array(e, &[11u8; 32]);
+    let email_signer =
+        Signer::External(email_verifier, email_key_data(e, &issuer, &subject_hash));
+
+    let target = Address::generate(e);
+    let client = MetaAccountClient::new(e, &account);
+    let rule = client.add_context_rule(
+        &ContextRuleType::CallContract(target.clone()),
+        &String::from_str(e, "email"),
+        &None,
+        &vec![e, email_signer.clone()],
+        &Map::new(e),
+    );
+
+    EmailSetup { account, target, email_signer, issuer, subject_hash, email_rule_id: rule.id }
+}
+
+fn email_auth_result(
+    e: &Env,
+    setup: &EmailSetup,
+    call_target: &Address,
+    challenge_payload: &BytesN<32>,
+    presented_payload: &BytesN<32>,
+    expires_at: u64,
+) -> Result<(), Result<SmartAccountError, soroban_sdk::InvokeError>> {
+    let context_rule_ids = vec![e, setup.email_rule_id];
+    let challenge = auth_digest(e, challenge_payload, &context_rule_ids);
+    let attestation =
+        issue_attestation(e, &setup.issuer, &setup.subject_hash, &challenge, expires_at);
+
+    let auth_payload = AuthPayload {
+        signers: map![e, (setup.email_signer.clone(), attestation)],
+        context_rule_ids,
+    };
+    let auth_contexts = vec![
+        e,
+        Context::Contract(ContractContext {
+            contract: call_target.clone(),
+            fn_name: symbol_short!("transfer"),
+            args: vec![e],
+        }),
+    ];
+
+    e.try_invoke_contract_check_auth::<SmartAccountError>(
+        &setup.account,
+        presented_payload,
+        auth_payload.into_val(e),
+        &auth_contexts,
+    )
+}
+
+#[test]
+fn check_auth_with_email_attestation_succeeds() {
+    let e = Env::default();
+    let setup = setup_email_account(&e);
+
+    let payload = BytesN::<32>::random(&e);
+    let target = setup.target.clone();
+    let result = email_auth_result(&e, &setup, &target, &payload, &payload, NOW + 300);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn email_rule_does_not_authorize_other_contract() {
+    let e = Env::default();
+    let setup = setup_email_account(&e);
+
+    let payload = BytesN::<32>::random(&e);
+    let other_contract = Address::generate(&e);
+    let result = email_auth_result(&e, &setup, &other_contract, &payload, &payload, NOW + 300);
+    assert!(result.is_err());
+}
+
+#[test]
+fn expired_email_attestation_fails() {
+    let e = Env::default();
+    let setup = setup_email_account(&e);
+
+    let payload = BytesN::<32>::random(&e);
+    let target = setup.target.clone();
+    let result = email_auth_result(&e, &setup, &target, &payload, &payload, NOW - 1);
+    assert!(result.is_err());
+}
+
+#[test]
+fn email_attestation_bound_to_other_tx_fails() {
+    let e = Env::default();
+    let setup = setup_email_account(&e);
+
+    // Attestation emitida para o digest de outra transação.
+    let signed_for = BytesN::<32>::random(&e);
+    let presented = BytesN::<32>::random(&e);
+    let target = setup.target.clone();
+    let result = email_auth_result(&e, &setup, &target, &signed_for, &presented, NOW + 300);
     assert!(result.is_err());
 }
 

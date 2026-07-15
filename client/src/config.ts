@@ -18,6 +18,15 @@ export const TESTNET_CONFIG = {
   // https://channels.openzeppelin.com/testnet (API key em /gen), passada
   // via relayerUrl + proxy próprio quando houver policy de quota.
   relayerUrl: undefined as string | undefined,
+
+  // Fase 2 — email attestation. Faça o deploy do verificador deste repo:
+  //   stellar contract build
+  //   stellar contract deploy \
+  //     --wasm target/wasm32v1-none/release/email_attestation_verifier.wasm \
+  //     --source <identity> --network testnet
+  // e cole o C-address aqui. O serviço emissor roda em services/auth-issuer.
+  emailVerifierAddress: 'CEMAIL_VERIFIER_NOT_DEPLOYED_YET',
+  authIssuerUrl: 'http://localhost:8788',
 };
 
 export const APP_NAME = 'Abstraction';

@@ -613,6 +613,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "email-attestation-verifier"
+version = "0.0.0"
+dependencies = [
+ "ed25519-dalek",
+ "soroban-sdk",
+ "stellar-accounts",
+]
+
+[[package]]
 name = "enum-ordinalize"
 version = "4.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -960,6 +969,7 @@ version = "0.0.0"
 dependencies = [
  "ed25519-dalek",
  "ed25519-verifier",
+ "email-attestation-verifier",
  "soroban-sdk",
  "stellar-accounts",
  "stellar-contract-utils",
