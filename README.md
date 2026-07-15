@@ -1,5 +1,9 @@
 # Abstraction
 
+<video src="demo/abstraction-demo.mp4" controls muted width="100%"></video>
+
+[▶️ Demo em vídeo (57s)](demo/abstraction-demo.mp4)
+
 Generalized abstraction na Stellar: smart accounts com login por passkey, sem
 seed phrase e com taxas patrocinadas — o modelo da Xion portado para o desenho
 nativo de Stellar/Soroban.
