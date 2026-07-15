@@ -118,6 +118,16 @@ fn target_not_allowed_rejected() {
 }
 
 #[test]
+fn self_invocation_bypasses_target_allowlist() {
+    let s = setup();
+    s.client.set_allowance(&s.user, &default_allowance());
+
+    // Alvo == usuário (conta se auto-invocando): allowance governa, sem
+    // precisar de allowlist.
+    assert_eq!(s.client.consume(&s.user, &s.user, &10), 10);
+}
+
+#[test]
 fn missing_or_expired_allowance_rejected() {
     let s = setup();
     s.client.allow_target(&s.target, &true);

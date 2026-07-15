@@ -246,7 +246,10 @@ impl Treasury {
         if amount <= 0 {
             panic_with_error!(e, TreasuryError::AmountInvalid);
         }
-        if !Self::is_target_allowed(e, target.clone()) {
+        // Smart accounts roteiam ações via self-invocação (execute): quando o
+        // alvo é a própria conta, o gate é a allowance do usuário; a
+        // allowlist governa chamadas diretas a contratos externos.
+        if user != target && !Self::is_target_allowed(e, target.clone()) {
             panic_with_error!(e, TreasuryError::TargetNotAllowed);
         }
 

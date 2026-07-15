@@ -35,7 +35,7 @@ export const TESTNET_CONFIG = {
   spendingLimitPolicyAddress: 'CC3GRDE3QDLXFOZJMC6SNZHRKWGQXELANBJWS6T3H7GO77K4NRKFUIDT',
 
   // Fase 3 — treasury deste repo (owner: demo, operator: relayer).
-  treasuryContractId: 'CA76GR6BIAQJMDFGOTAVAMAITTDIKKDTS344SL4KFCPVOG7LVLVR3LUX',
+  treasuryContractId: 'CDKC5JHDED55KNI7U7AEJMZN6NLOYIASUWXPAV2QE74SMZ4VEFM7NKOV',
   // XLM SAC no testnet (token do treasury e alvo patrocinável do demo).
   xlmSacAddress: 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC',
 };
