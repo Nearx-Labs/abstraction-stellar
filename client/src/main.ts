@@ -10,6 +10,28 @@ const disconnectBtn = document.getElementById('disconnect') as HTMLButtonElement
 // Destinatário do demo (a conta "demo" do stellar CLI).
 const DEMO_RECIPIENT = 'GBKMZQWUCKIGARWNLOQFFMWUJSTY6FAIDT73EZOQK5A5HFGXBBSBE72Z';
 
+const EXPLORER = 'https://stellar.expert/explorer/testnet';
+
+function link(href: string, label: string): string {
+  return `<a href="${href}" target="_blank" rel="noopener">${label}</a>`;
+}
+
+const contractLink = (addr: string, label = addr) => link(`${EXPLORER}/contract/${addr}`, label);
+const txLink = (hash: string) => link(`${EXPLORER}/tx/${hash}`, hash);
+
+// Rodapé com todos os contratos implantados, clicáveis.
+document.getElementById('contracts-list')!.innerHTML = (
+  [
+    ['Treasury (paymaster)', TESTNET_CONFIG.treasuryContractId],
+    ['WebAuthn verifier (passkeys)', TESTNET_CONFIG.webauthnVerifierAddress],
+    ['Ed25519 verifier (session keys)', TESTNET_CONFIG.ed25519VerifierAddress],
+    ['Email attestation verifier', TESTNET_CONFIG.emailVerifierAddress],
+    ['Spending-limit policy', TESTNET_CONFIG.spendingLimitPolicyAddress],
+  ] as const
+)
+  .map(([label, addr]) => `<li>${label}: ${contractLink(addr, addr.slice(0, 8) + '…')}</li>`)
+  .join('');
+
 const kit = new SmartAccountKit({
   rpcUrl: TESTNET_CONFIG.rpcUrl,
   networkPassphrase: TESTNET_CONFIG.networkPassphrase,
@@ -25,8 +47,16 @@ function setStatus(text: string) {
   statusEl.textContent = text;
 }
 
+// Conteúdo montado apenas com constantes locais + hashes retornados pela
+// rede — nunca input livre do usuário.
+function setStatusHtml(html: string) {
+  statusEl.innerHTML = html;
+}
+
 function setConnected(contractId: string) {
-  setStatus(`Conectado.\n\nSmart account:\n${contractId}\n\nRede: testnet`);
+  setStatusHtml(
+    `Conectado.\n\nSmart account:\n${contractLink(contractId)}\n\nRede: testnet`,
+  );
   createBtn.hidden = true;
   connectBtn.hidden = true;
   sendBtn.hidden = false;
@@ -72,11 +102,11 @@ sendBtn.addEventListener('click', async () => {
     setStatus('Assinando com a passkey e submetendo via relayer patrocinado…');
     const result = await kit.transfer(TESTNET_CONFIG.xlmSacAddress, DEMO_RECIPIENT, 1);
     if (result.success) {
-      setStatus(
+      setStatusHtml(
         `✅ 1 XLM enviado — fee paga pelo sponsor, não pelo usuário.\n\n` +
-          `Hash: ${result.hash ?? '(via relayer)'}\n\n` +
-          `Quota e débito auditável no Treasury:\n` +
-          `${TESTNET_CONFIG.treasuryContractId}`,
+          `Transação:\n${result.hash ? txLink(result.hash) : '(via relayer)'}\n\n` +
+          `Débito auditável no Treasury:\n` +
+          `${contractLink(TESTNET_CONFIG.treasuryContractId)}`,
       );
     } else {
       setStatus(`Transferência recusada: [${result.error.code}] ${result.error.message}`);

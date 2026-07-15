@@ -104,6 +104,24 @@ Destaque três nomes de teste (grep no output):
 Identidades do stellar CLI: `demo` (owner do treasury) e `relayer`
 (fee payer + operator). Treasury financiado com 100 XLM.
 
+## Links prontos (stellar.expert)
+
+Transações do demo:
+- Transferência patrocinada #1: https://stellar.expert/explorer/testnet/tx/72959678458f44c33ebfab19abffeeff6d5656eaaab21b61539b1104d9e73649
+- Transferência patrocinada #2 (com débito no treasury): https://stellar.expert/explorer/testnet/tx/f64ee072362d5688deace52a29b0322422cfa752ab0b67554c6ba6ed939016aa
+
+Contratos:
+- Smart account do demo: https://stellar.expert/explorer/testnet/contract/CD2L3KBH277A6RD2SK5QKQDNRCFWPLIDNXKVXJCYQKNEFOHEPZZKOAAK
+- Treasury (eventos de débito na aba "Events"): https://stellar.expert/explorer/testnet/contract/CDKC5JHDED55KNI7U7AEJMZN6NLOYIASUWXPAV2QE74SMZ4VEFM7NKOV
+- WebAuthn verifier: https://stellar.expert/explorer/testnet/contract/CBQGQXWD6GSCPMP32JRPRPXPNHEN7PWEUI6LXOQZ2HWODO6ZAXRG3SPI
+- Ed25519 verifier: https://stellar.expert/explorer/testnet/contract/CCNJDEL774D5UIOEYXIJZRY3HVVR4FIKGGURY34TFCWPAC25QYNRUKMJ
+- Email attestation verifier: https://stellar.expert/explorer/testnet/contract/CDW2NDHXXVZB7PMIIBISBBJKBX6AM77CXX5TVH66PUGERZM5JPCDJWKM
+- Spending-limit policy: https://stellar.expert/explorer/testnet/contract/CC3GRDE3QDLXFOZJMC6SNZHRKWGQXELANBJWS6T3H7GO77K4NRKFUIDT
+
+Contas de serviço:
+- Relayer / fee payer (todas as fees patrocinadas saem daqui): https://stellar.expert/explorer/testnet/account/GCVG5DFUQGRNGKT3WJHJIBXQHS34R5Z6AU7UQR64AAUG5LRZLMZJJFH7
+- Demo / owner do treasury: https://stellar.expert/explorer/testnet/account/GBKMZQWUCKIGARWNLOQFFMWUJSTY6FAIDT73EZOQK5A5HFGXBBSBE72Z
+
 ## Troubleshooting
 
 - **Passkey não aparece**: use Chrome/Safari em `localhost` (contexto

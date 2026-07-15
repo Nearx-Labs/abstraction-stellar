@@ -26,9 +26,19 @@
         word-break: break-all;
         white-space: pre-wrap;
       }
+      a { color: #2563eb; }
+      #contracts {
+        margin-top: 2rem;
+        font-size: 0.85rem;
+        color: #71717a;
+      }
+      #contracts summary { cursor: pointer; }
+      #contracts li { margin: 0.3rem 0; }
       @media (prefers-color-scheme: dark) {
         body { background: #18181b; color: #e4e4e7; }
         #status { background: #27272a; }
+        a { color: #60a5fa; }
+        #contracts { color: #a1a1aa; }
       }
     </style>
   </head>
@@ -45,6 +55,10 @@
       <button id="disconnect" hidden>Sair</button>
     </div>
     <div id="status">Desconectado.</div>
+    <details id="contracts">
+      <summary>Contratos no testnet (stellar.expert)</summary>
+      <ul id="contracts-list"></ul>
+    </details>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
