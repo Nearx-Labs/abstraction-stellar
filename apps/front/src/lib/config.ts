@@ -47,12 +47,12 @@ export const CONFIG = {
   /** Ledger de POC: mint com campos livres (contracts/demo-ledger). */
   demoLedgerAddress: fromEnv(
     'VITE_DEMO_LEDGER',
-    'CDIUO6EQ5DE6W3BYTF5YT2DDXMMZ4IEM4NKURDQT5WTBOXZASBWZTR6R',
+    'CCBGDWXPHXPGYJL2T4GDIF6PAGZ3XVYFR67HBFQ5RVJXGNMT5KGCUD5G',
   ),
   /** Policy que limita QUANTOS mints uma regra pode fazer (contracts/mint-quota-policy). */
   mintQuotaPolicyAddress: fromEnv(
     'VITE_MINT_QUOTA_POLICY',
-    'CDFOWCHLFZVD64CZ2PNAE6HVUT2UM33323D3ZPCZXMQ4AE4WN4UANVPV',
+    'CCKCKDXEWD3LHSZT3OLTJTRFNMXPQPONKUPQPQJ2CAXFVNACJDFAYWVJ',
   ),
 
   /** O kit posta aqui; a publishable key identifica o app pelo path. */

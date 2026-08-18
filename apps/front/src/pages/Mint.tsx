@@ -6,7 +6,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { ExternalLink, Layers, Plus, Sparkles, Trash2 } from 'lucide-react';
+import { ArrowRightLeft, ExternalLink, Layers, Plus, RefreshCw, Sparkles, Trash2 } from 'lucide-react';
 import {
   Alert,
   Badge,
@@ -15,6 +15,7 @@ import {
   CardTitle,
   Field,
   Input,
+  Modal,
   Skeleton,
 } from '@/components/ui';
 import { api } from '@/lib/api';
@@ -24,19 +25,23 @@ import {
   LIMITS,
   cleanFields,
   mintRecord,
+  newUuid,
+  transferRecord,
   validateMint,
   type CustomField,
 } from '@/lib/mint';
 import { truncateAddress } from '@/lib/utils';
 
 interface LedgerRecord {
-  id: number;
+  uuid: string;
   owner: string;
+  minter: string;
   name: string;
   uri: string;
   fields: Record<string, string>;
   mintedAt: number;
   mintedLedger: number;
+  transfers: number;
 }
 
 const SUGGESTIONS: CustomField[] = [
@@ -48,6 +53,9 @@ const SUGGESTIONS: CustomField[] = [
 export function MintPage({ address }: { address: string }) {
   const queryClient = useQueryClient();
 
+  const [uuid, setUuid] = useState(newUuid);
+  const [transferTarget, setTransferTarget] = useState<LedgerRecord | null>(null);
+  const [transferTo, setTransferTo] = useState('');
   const [name, setName] = useState('');
   const [uri, setUri] = useState('');
   const [fields, setFields] = useState<CustomField[]>([
@@ -64,8 +72,8 @@ export function MintPage({ address }: { address: string }) {
     refetchInterval: 20_000,
   });
 
-  const input = { name, uri, fields: cleanFields(fields) };
-  const validationError = validateMint({ name, uri, fields });
+  const input = { uuid, name, uri, fields: cleanFields(fields) };
+  const validationError = validateMint({ uuid, name, uri, fields });
 
   const mint = useMutation({
     mutationFn: async () => {
@@ -81,6 +89,7 @@ export function MintPage({ address }: { address: string }) {
           ? { label: 'Ver transação', onClick: () => window.open(txUrl(result.hash!), '_blank') }
           : undefined,
       });
+      setUuid(newUuid());
       setName('');
       setUri('');
       setFields([
@@ -89,6 +98,27 @@ export function MintPage({ address }: { address: string }) {
       ]);
       void queryClient.invalidateQueries({ queryKey: ['ledger'] });
       void queryClient.invalidateQueries({ queryKey: ['usage', address] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  const transfer = useMutation({
+    mutationFn: async () => {
+      if (!transferTarget) throw new Error('nenhum item selecionado');
+      const result = await transferRecord(kit, transferTarget.uuid, transferTo);
+      if (!result.success) {
+        throw new Error(result.error?.message ?? 'O contrato recusou a transferência.');
+      }
+      return result;
+    },
+    onSuccess: (result) => {
+      toast.success('Posse transferida.', {
+        action: result.hash
+          ? { label: 'Ver transação', onClick: () => window.open(txUrl(result.hash!), '_blank') }
+          : undefined,
+      });
+      setTransferTarget(null);
+      void queryClient.invalidateQueries({ queryKey: ['ledger'] });
     },
     onError: (error: Error) => toast.error(error.message),
   });
@@ -121,11 +151,28 @@ export function MintPage({ address }: { address: string }) {
 
         <p className="mb-5 text-sm text-muted">
           Os campos abaixo entram <strong className="text-fg">dentro do contrato</strong>, não num
-          banco de dados. Cada registro vira uma entrada numerada e imutável no ledger, com evento
-          on-chain — e a taxa é paga pelo sponsor.
+          banco de dados. O item é identificado pelo UUID — a mesma chave que o sistema
+          consumidor guarda no banco dele — e a taxa é paga pelo sponsor.
         </p>
 
         <div className="space-y-4">
+          <Field
+            label="UUID do item"
+            hint="Gerado aqui e gravado no banco do sistema consumidor. É a chave dos dois lados."
+          >
+            <div className="flex gap-2">
+              <Input
+                className="flex-1 font-mono text-xs"
+                value={uuid}
+                onChange={(event) => setUuid(event.target.value.trim())}
+                spellCheck={false}
+              />
+              <Button variant="outline" aria-label="Gerar outro UUID" onClick={() => setUuid(newUuid())}>
+                <RefreshCw className="size-4" />
+              </Button>
+            </div>
+          </Field>
+
           <Field label="Nome do item" hint={`Até ${LIMITS.maxNameLen} caracteres.`}>
             <Input
               value={name}
@@ -243,15 +290,33 @@ export function MintPage({ address }: { address: string }) {
         ) : (
           <ul className="divide-y divide-border">
             {ledger.data.items.map((record) => (
-              <li key={record.id} className="py-4">
+              <li key={record.uuid} className="py-4">
                 <div className="flex flex-wrap items-center gap-2">
-                  <Badge tone="muted">#{record.id}</Badge>
                   <p className="flex-1 truncate text-sm font-medium text-fg">{record.name}</p>
+                  {record.transfers > 0 && (
+                    <Badge tone="muted">
+                      {record.transfers} {record.transfers === 1 ? 'troca' : 'trocas'}
+                    </Badge>
+                  )}
                   {record.owner === address && <Badge tone="primary">seu</Badge>}
+                  {record.owner === address && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setTransferTarget(record);
+                        setTransferTo('');
+                      }}
+                    >
+                      <ArrowRightLeft className="size-3.5" /> Transferir
+                    </Button>
+                  )}
                 </div>
 
-                <p className="mt-1 font-mono text-xs text-muted">
-                  {truncateAddress(record.owner, 6, 4)} · ledger {record.mintedLedger}
+                <p className="mt-1 font-mono text-[11px] text-muted">{record.uuid}</p>
+
+                <p className="mt-0.5 font-mono text-xs text-muted">
+                  dono {truncateAddress(record.owner, 6, 4)} · ledger {record.mintedLedger}
                   {record.mintedAt > 0 &&
                     ` · ${new Date(record.mintedAt * 1000).toLocaleString('pt-BR', {
                       dateStyle: 'short',
@@ -278,6 +343,46 @@ export function MintPage({ address }: { address: string }) {
           </ul>
         )}
       </Card>
+
+      {/* ── Transferência: é a venda do marketplace ─────────────────────── */}
+      <Modal
+        open={transferTarget !== null}
+        onClose={() => setTransferTarget(null)}
+        title="Transferir item"
+        description="A posse passa on-chain para o novo dono. Isso pede sua digital."
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setTransferTarget(null)}>
+              Cancelar
+            </Button>
+            <Button
+              full
+              loading={transfer.isPending}
+              disabled={!/^[GC][A-Z2-7]{55}$/.test(transferTo)}
+              onClick={() => transfer.mutate()}
+            >
+              Transferir
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <div className="rounded-xl border border-border bg-surface-2 p-3">
+            <p className="text-sm text-fg">{transferTarget?.name}</p>
+            <p className="mt-0.5 font-mono text-[11px] text-muted">{transferTarget?.uuid}</p>
+          </div>
+
+          <Field label="Novo dono" hint="Endereço de conta (G…) ou de contrato (C…).">
+            <Input
+              className="font-mono text-xs"
+              placeholder="C… ou G…"
+              value={transferTo}
+              onChange={(event) => setTransferTo(event.target.value.trim())}
+              spellCheck={false}
+            />
+          </Field>
+        </div>
+      </Modal>
     </>
   );
 }

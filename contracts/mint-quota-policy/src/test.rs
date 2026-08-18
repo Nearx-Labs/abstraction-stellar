@@ -40,7 +40,7 @@ struct Fixture {
     target: Address,
 }
 
-fn setup(max_calls: u32, period_ledgers: u32) -> Fixture {
+fn setup(max_items: u32, period_ledgers: u32) -> Fixture {
     let e = Env::default();
     e.mock_all_auths();
     let contract_id = e.register(MintQuotaPolicyContract, ());
@@ -51,7 +51,7 @@ fn setup(max_calls: u32, period_ledgers: u32) -> Fixture {
 
     client.install(
         &MintQuotaParams {
-            max_calls,
+            max_items,
             period_ledgers,
         },
         &rule(&e, &target),
@@ -83,7 +83,7 @@ fn allows_calls_up_to_the_cap() {
         enforce(&f);
         let data = f.client.get_quota_data(&RULE_ID, &f.account);
         assert_eq!(data.used, expected);
-        assert_eq!(data.max_calls, 3);
+        assert_eq!(data.max_items, 3);
     }
 }
 
@@ -119,7 +119,7 @@ fn quota_is_isolated_per_account() {
     let other = Address::generate(&f.e);
     f.client.install(
         &MintQuotaParams {
-            max_calls: 5,
+            max_items: 5,
             period_ledgers: 1_000,
         },
         &rule(&f.e, &f.target),
@@ -141,7 +141,7 @@ fn set_quota_raises_the_cap() {
         .set_quota(&5, &1_000, &rule(&f.e, &f.target), &f.account);
 
     let data = f.client.get_quota_data(&RULE_ID, &f.account);
-    assert_eq!(data.max_calls, 5);
+    assert_eq!(data.max_items, 5);
     // O consumo já feito continua contando — subir o teto não zera a janela.
     assert_eq!(data.used, 1);
     enforce(&f);
@@ -159,7 +159,7 @@ fn zero_cap_is_rejected() {
 
     client.install(
         &MintQuotaParams {
-            max_calls: 0,
+            max_items: 0,
             period_ledgers: 1_000,
         },
         &rule(&e, &target),
@@ -217,10 +217,78 @@ fn install_params_round_trip_through_val() {
     // ao guardar os install params na context rule.
     let e = Env::default();
     let params = MintQuotaParams {
-        max_calls: 7,
+        max_items: 7,
         period_ledgers: 720,
     };
     let val: soroban_sdk::Val = params.clone().into_val(&e);
     let back: MintQuotaParams = soroban_sdk::FromVal::from_val(&e, &val);
     assert_eq!(back, params);
+}
+
+#[test]
+fn batch_consumes_one_unit_per_item() {
+    let f = setup(10, 1_000);
+
+    // mint_batch com 4 UUIDs desconta 4, não 1 — é o que faz "10.000 NFTs"
+    // significar 10.000 itens e não 10.000 transações.
+    let uuids = Vec::from_array(
+        &f.e,
+        [
+            String::from_str(&f.e, "a"),
+            String::from_str(&f.e, "b"),
+            String::from_str(&f.e, "c"),
+            String::from_str(&f.e, "d"),
+        ],
+    );
+
+    f.client.enforce(
+        &Context::Contract(ContractContext {
+            contract: f.target.clone(),
+            fn_name: Symbol::new(&f.e, "mint_batch"),
+            args: Vec::from_array(
+                &f.e,
+                [
+                    f.account.clone().into_val(&f.e),
+                    uuids.into_val(&f.e),
+                    String::from_str(&f.e, "nome").into_val(&f.e),
+                ],
+            ),
+        }),
+        &Vec::new(&f.e),
+        &rule(&f.e, &f.target),
+        &f.account,
+    );
+
+    assert_eq!(f.client.get_quota_data(&RULE_ID, &f.account).used, 4);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #6200)")]
+fn batch_bigger_than_the_cap_is_rejected_whole() {
+    let f = setup(3, 1_000);
+
+    let uuids = Vec::from_array(
+        &f.e,
+        [
+            String::from_str(&f.e, "a"),
+            String::from_str(&f.e, "b"),
+            String::from_str(&f.e, "c"),
+            String::from_str(&f.e, "d"),
+        ],
+    );
+
+    // 4 itens com teto 3: o lote inteiro cai, não "passa 3 e corta 1".
+    f.client.enforce(
+        &Context::Contract(ContractContext {
+            contract: f.target.clone(),
+            fn_name: Symbol::new(&f.e, "mint_batch"),
+            args: Vec::from_array(
+                &f.e,
+                [f.account.clone().into_val(&f.e), uuids.into_val(&f.e)],
+            ),
+        }),
+        &Vec::new(&f.e),
+        &rule(&f.e, &f.target),
+        &f.account,
+    );
 }

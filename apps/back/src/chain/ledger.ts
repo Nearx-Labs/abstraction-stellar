@@ -17,13 +17,19 @@ import {
 import { NETWORK_PASSPHRASE, server } from './rpc.js';
 
 export interface LedgerRecord {
-  id: number;
+  /** Identificador vindo de fora da chain — a mesma chave do banco consumidor. */
+  uuid: string;
+  /** Dono atual; muda a cada venda. */
   owner: string;
+  /** Quem mintou; não muda — diz de qual tenant o item saiu. */
+  minter: string;
   name: string;
   uri: string;
   fields: Record<string, string>;
   mintedAt: number;
   mintedLedger: number;
+  transfers: number;
+  lastTransferLedger: number;
 }
 
 async function simulate(
@@ -65,13 +71,16 @@ function normalizeFields(raw: unknown): Record<string, string> {
 /* eslint-disable @typescript-eslint/no-explicit-any */
 function toRecord(raw: any): LedgerRecord {
   return {
-    id: Number(raw.id),
+    uuid: String(raw.uuid),
     owner: String(raw.owner),
+    minter: String(raw.minter ?? raw.owner),
     name: String(raw.name),
     uri: String(raw.uri ?? ''),
     fields: normalizeFields(raw.fields),
     mintedAt: Number(raw.minted_at ?? 0),
     mintedLedger: Number(raw.minted_ledger ?? 0),
+    transfers: Number(raw.transfers ?? 0),
+    lastTransferLedger: Number(raw.last_transfer_ledger ?? 0),
   };
 }
 
@@ -95,11 +104,11 @@ export async function page(
 
 export async function getRecord(
   contractId: string,
-  id: number,
+  uuid: string,
 ): Promise<LedgerRecord | null> {
   try {
     const raw = await simulate(contractId, 'get_record', [
-      nativeToScVal(id, { type: 'u32' }),
+      nativeToScVal(uuid, { type: 'string' }),
     ]);
     return raw ? toRecord(raw) : null;
   } catch {
@@ -107,9 +116,21 @@ export async function getRecord(
   }
 }
 
-export async function recordsOf(contractId: string, owner: string): Promise<number[]> {
+export async function ownerOf(contractId: string, uuid: string): Promise<string | null> {
+  try {
+    const raw = await simulate(contractId, 'owner_of', [
+      nativeToScVal(uuid, { type: 'string' }),
+    ]);
+    return raw ? String(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** UUIDs em posse de uma conta. */
+export async function recordsOf(contractId: string, owner: string): Promise<string[]> {
   const raw = (await simulate(contractId, 'records_of', [
     new Address(owner).toScVal(),
   ])) as unknown[] | undefined;
-  return Array.isArray(raw) ? raw.map(Number) : [];
+  return Array.isArray(raw) ? raw.map(String) : [];
 }

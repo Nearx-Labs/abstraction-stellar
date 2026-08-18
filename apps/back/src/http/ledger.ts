@@ -41,11 +41,11 @@ ledgerRoutes.get('/ledger', async (c) => {
   return c.json({ success: true, contractId, total, offset, limit, items });
 });
 
-ledgerRoutes.get('/ledger/:id', async (c) => {
+ledgerRoutes.get('/ledger/:uuid', async (c) => {
   const contractId = ledgerId();
   if (!contractId) return c.json(notConfigured(), 409);
 
-  const record = await ledger.getRecord(contractId, Number(c.req.param('id')));
+  const record = await ledger.getRecord(contractId, c.req.param('uuid'));
   if (!record) {
     return c.json({ success: false, error: 'registro não encontrado', errorCode: 'NOT_FOUND' }, 404);
   }
@@ -56,14 +56,14 @@ ledgerRoutes.get('/accounts/:address/ledger', async (c) => {
   const contractId = ledgerId();
   if (!contractId) return c.json(notConfigured(), 409);
 
-  const ids = await ledger.recordsOf(contractId, c.req.param('address'));
+  const uuids = await ledger.recordsOf(contractId, c.req.param('address'));
   const records = await Promise.all(
-    ids.slice(-25).reverse().map((id) => ledger.getRecord(contractId, id)),
+    uuids.slice(-25).reverse().map((uuid) => ledger.getRecord(contractId, uuid)),
   );
   return c.json({
     success: true,
     contractId,
-    total: ids.length,
+    total: uuids.length,
     items: records.filter((record) => record !== null),
   });
 });

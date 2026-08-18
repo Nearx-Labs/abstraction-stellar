@@ -48,7 +48,7 @@ const schema = z
     // Contrato de POC do mint com campos livres (contracts/demo-ledger).
     DEMO_LEDGER_CONTRACT_ID: z
       .string()
-      .default('CDIUO6EQ5DE6W3BYTF5YT2DDXMMZ4IEM4NKURDQT5WTBOXZASBWZTR6R'),
+      .default('CCBGDWXPHXPGYJL2T4GDIF6PAGZ3XVYFR67HBFQ5RVJXGNMT5KGCUD5G'),
     XLM_SAC_ADDRESS: z
       .string()
       .default('CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC'),

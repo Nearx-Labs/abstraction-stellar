@@ -23,9 +23,18 @@ export interface CustomField {
 }
 
 export interface MintInput {
+  /** Identificador gerado fora da chain — a mesma chave que o banco guarda. */
+  uuid: string;
   name: string;
   uri: string;
   fields: CustomField[];
+}
+
+export const LIMITS_UUID = 64;
+
+/** UUID v4 do browser; é o que o sistema consumidor grava no seu banco. */
+export function newUuid(): string {
+  return crypto.randomUUID();
 }
 
 function fieldsToScVal(fields: CustomField[]): xdr.ScVal {
@@ -54,6 +63,7 @@ export async function mintRecord(
 ): Promise<MintOutcome> {
   const args = [
     new Address(smartAccount).toScVal(),
+    nativeToScVal(input.uuid, { type: 'string' }),
     nativeToScVal(input.name, { type: 'string' }),
     nativeToScVal(input.uri, { type: 'string' }),
     fieldsToScVal(input.fields),
@@ -68,8 +78,23 @@ export async function mintRecord(
   return result;
 }
 
+/** Transfere a posse — é a venda do marketplace. Exige auth do dono atual. */
+export async function transferRecord(
+  kit: SmartAccountKit,
+  uuid: string,
+  to: string,
+): Promise<MintOutcome> {
+  return (await kit.executeAndSubmit(CONFIG.demoLedgerAddress, 'transfer', [
+    nativeToScVal(uuid, { type: 'string' }),
+    new Address(to).toScVal(),
+  ])) as unknown as MintOutcome;
+}
+
 /** Validação local — a mesma que o contrato aplica, para falhar antes da fee. */
 export function validateMint(input: MintInput): string | null {
+  if (input.uuid.trim().length === 0) return 'Gere um UUID para o item.';
+  if (input.uuid.length > LIMITS_UUID) return `O UUID passa de ${LIMITS_UUID} caracteres.`;
+
   const name = input.name.trim();
   if (name.length === 0) return 'Dê um nome ao item.';
   if (name.length > LIMITS.maxNameLen) return `O nome passa de ${LIMITS.maxNameLen} caracteres.`;

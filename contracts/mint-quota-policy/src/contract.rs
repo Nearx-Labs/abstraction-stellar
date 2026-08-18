@@ -1,8 +1,11 @@
 //! # Mint Quota Policy
 //!
-//! Limita **quantas chamadas** uma context rule pode fazer numa janela
+//! Limita **quantos itens** uma context rule pode emitir numa janela
 //! deslizante de ledgers. É o complemento da spending-limit-policy: aquela
 //! limita *valor*, esta limita *volume*.
+//!
+//! A contagem é em itens, não em transações: um `mint_batch` de 100 consome
+//! 100 da cota. É o número que o tenant entende quando autoriza "10.000 NFTs".
 //!
 //! Existe por um motivo concreto. Quando um sistema (o backend de um tenant)
 //! minta em nome de uma conta master, ele precisa de uma chave que assine
@@ -18,7 +21,7 @@
 //! do contrato serve todas as contas.
 use soroban_sdk::{
     auth::Context, contract, contracterror, contractevent, contractimpl, contracttype,
-    panic_with_error, Address, Env, Vec,
+    panic_with_error, Address, Env, String, Symbol, TryFromVal, Vec,
 };
 use stellar_accounts::{
     policies::Policy,
@@ -29,19 +32,19 @@ const DAY_IN_LEDGERS: u32 = 17_280;
 const TTL_EXTEND: u32 = 30 * DAY_IN_LEDGERS;
 const TTL_THRESHOLD: u32 = TTL_EXTEND - DAY_IN_LEDGERS;
 
-/// Teto de itens guardados no histórico. A janela é deslizante, então o
-/// histórico nunca precisa passar do limite configurado.
-const MAX_HISTORY: u32 = 1_000;
+/// Teto de entradas no histórico. Cada entrada é uma chamada, não um item —
+/// um lote de 100 ocupa uma linha só.
+const MAX_HISTORY: u32 = 500;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum MintQuotaError {
-    /// A regra estourou o número de chamadas permitido na janela.
+    /// A regra estourou o número de itens permitido na janela.
     QuotaExceeded = 6200,
     /// Policy não instalada para esta regra.
     NotInstalled = 6201,
-    /// `max_calls` zero ou `period_ledgers` zero.
+    /// `max_items` zero ou `period_ledgers` zero.
     ParamsInvalid = 6202,
 }
 
@@ -49,19 +52,27 @@ pub enum MintQuotaError {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MintQuotaParams {
-    /// Chamadas permitidas dentro da janela.
-    pub max_calls: u32,
+    /// Itens permitidos dentro da janela.
+    pub max_items: u32,
     /// Tamanho da janela, em ledgers (~5s cada).
     pub period_ledgers: u32,
+}
+
+/// Uma chamada registrada: em que ledger e quantos itens consumiu.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Consumption {
+    pub ledger: u32,
+    pub units: u32,
 }
 
 /// Estado corrente, para a interface mostrar quanto sobrou.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MintQuotaData {
-    pub max_calls: u32,
+    pub max_items: u32,
     pub period_ledgers: u32,
-    /// Chamadas dentro da janela agora.
+    /// Itens consumidos dentro da janela agora.
     pub used: u32,
     /// Ledger em que a chamada mais antiga da janela sai (0 se não há).
     pub window_resets_at: u32,
@@ -81,7 +92,7 @@ pub struct QuotaInstalled {
     pub smart_account: Address,
     #[topic]
     pub context_rule_id: u32,
-    pub max_calls: u32,
+    pub max_items: u32,
     pub period_ledgers: u32,
 }
 
@@ -93,7 +104,7 @@ pub struct QuotaConsumed {
     #[topic]
     pub context_rule_id: u32,
     pub used: u32,
-    pub max_calls: u32,
+    pub max_items: u32,
 }
 
 fn params_of(e: &Env, smart_account: &Address, rule_id: u32) -> MintQuotaParams {
@@ -103,22 +114,59 @@ fn params_of(e: &Env, smart_account: &Address, rule_id: u32) -> MintQuotaParams 
         .unwrap_or_else(|| panic_with_error!(e, MintQuotaError::NotInstalled))
 }
 
+/// Índice do argumento com a lista de UUIDs em `mint_batch(owner, uuids, …)`.
+const BATCH_UUIDS_ARG: u32 = 1;
+
+/// Quantas unidades esta chamada consome da cota.
+///
+/// A cota que um tenant concede é em **itens**, não em transações: autorizar
+/// "10.000 NFTs" e ver um único `mint_batch` de 100 gastar 1 seria enganoso.
+/// Por isso a policy olha os argumentos e desconta o tamanho do lote.
+///
+/// Uma função desconhecida no escopo da regra consome 1 — cota nunca é
+/// contornada por engano, no máximo é cobrada a mais.
+fn units_of(e: &Env, context: &Context) -> u32 {
+    let Context::Contract(call) = context else {
+        return 1;
+    };
+
+    if call.fn_name != Symbol::new(e, "mint_batch") {
+        return 1;
+    }
+
+    match call.args.try_get(BATCH_UUIDS_ARG) {
+        Ok(Some(arg)) => Vec::<String>::try_from_val(e, &arg)
+            .map(|uuids| uuids.len().max(1))
+            .unwrap_or(1),
+        _ => 1,
+    }
+}
+
 /// Remove do histórico as chamadas que já saíram da janela.
 ///
 /// A comparação é `entry + period > current`, e não `entry > current - period`:
 /// a segunda forma satura em zero nos primeiros ledgers da rede (e nos testes),
 /// e aí uma chamada feita *agora* seria descartada na mesma hora — a cota
 /// nunca contaria nada.
-fn prune(e: &Env, history: &Vec<u32>, period: u32) -> Vec<u32> {
+fn prune(e: &Env, history: &Vec<Consumption>, period: u32) -> Vec<Consumption> {
     let current = e.ledger().sequence();
 
     let mut kept = Vec::new(e);
     for entry in history.iter() {
-        if entry.saturating_add(period) > current {
+        if entry.ledger.saturating_add(period) > current {
             kept.push_back(entry);
         }
     }
     kept
+}
+
+/// Itens consumidos na janela.
+fn used_units(window: &Vec<Consumption>) -> u32 {
+    let mut total: u32 = 0;
+    for entry in window.iter() {
+        total = total.saturating_add(entry.units);
+    }
+    total
 }
 
 #[contract]
@@ -128,13 +176,13 @@ pub struct MintQuotaPolicyContract;
 impl Policy for MintQuotaPolicyContract {
     type AccountParams = MintQuotaParams;
 
-    /// Conta a chamada e recusa se a janela já está cheia.
+    /// Desconta os itens da chamada e recusa se a janela já está cheia.
     ///
     /// Roda dentro do `__check_auth` da conta, então recusar aqui derruba a
     /// transação inteira — o N+1 simplesmente não acontece.
     fn enforce(
         e: &Env,
-        _context: Context,
+        context: Context,
         _authenticated_signers: Vec<Signer>,
         context_rule: ContextRule,
         smart_account: Address,
@@ -144,15 +192,20 @@ impl Policy for MintQuotaPolicyContract {
         let params = params_of(e, &smart_account, context_rule.id);
         let key = DataKey::History(smart_account.clone(), context_rule.id);
 
-        let history: Vec<u32> = e.storage().persistent().get(&key).unwrap_or(Vec::new(e));
+        let history: Vec<Consumption> = e.storage().persistent().get(&key).unwrap_or(Vec::new(e));
         let mut window = prune(e, &history, params.period_ledgers);
 
-        if window.len() >= params.max_calls || window.len() >= MAX_HISTORY {
+        let units = units_of(e, &context);
+        let used = used_units(&window).saturating_add(units);
+
+        if used > params.max_items || window.len() >= MAX_HISTORY {
             panic_with_error!(e, MintQuotaError::QuotaExceeded);
         }
 
-        window.push_back(e.ledger().sequence());
-        let used = window.len();
+        window.push_back(Consumption {
+            ledger: e.ledger().sequence(),
+            units,
+        });
 
         e.storage().persistent().set(&key, &window);
         e.storage()
@@ -163,7 +216,7 @@ impl Policy for MintQuotaPolicyContract {
             smart_account,
             context_rule_id: context_rule.id,
             used,
-            max_calls: params.max_calls,
+            max_items: params.max_items,
         }
         .publish(e);
     }
@@ -176,7 +229,7 @@ impl Policy for MintQuotaPolicyContract {
     ) {
         smart_account.require_auth();
 
-        if install_params.max_calls == 0 || install_params.period_ledgers == 0 {
+        if install_params.max_items == 0 || install_params.period_ledgers == 0 {
             panic_with_error!(e, MintQuotaError::ParamsInvalid);
         }
 
@@ -189,7 +242,7 @@ impl Policy for MintQuotaPolicyContract {
         QuotaInstalled {
             smart_account,
             context_rule_id: context_rule.id,
-            max_calls: install_params.max_calls,
+            max_items: install_params.max_items,
             period_ledgers: install_params.period_ledgers,
         }
         .publish(e);
@@ -211,7 +264,7 @@ impl MintQuotaPolicyContract {
     /// Quanto da cota já foi usado — é o que a tela do tenant mostra.
     pub fn get_quota_data(e: &Env, context_rule_id: u32, smart_account: Address) -> MintQuotaData {
         let params = params_of(e, &smart_account, context_rule_id);
-        let history: Vec<u32> = e
+        let history: Vec<Consumption> = e
             .storage()
             .persistent()
             .get(&DataKey::History(smart_account, context_rule_id))
@@ -220,13 +273,13 @@ impl MintQuotaPolicyContract {
 
         let window_resets_at = window
             .first()
-            .map(|oldest| oldest + params.period_ledgers)
+            .map(|oldest| oldest.ledger + params.period_ledgers)
             .unwrap_or(0);
 
         MintQuotaData {
-            max_calls: params.max_calls,
+            max_items: params.max_items,
             period_ledgers: params.period_ledgers,
-            used: window.len(),
+            used: used_units(&window),
             window_resets_at,
         }
     }
@@ -235,20 +288,20 @@ impl MintQuotaPolicyContract {
     /// teto é o dono, com passkey, nunca o serviço que consome a cota.
     pub fn set_quota(
         e: &Env,
-        max_calls: u32,
+        max_items: u32,
         period_ledgers: u32,
         context_rule: ContextRule,
         smart_account: Address,
     ) {
         smart_account.require_auth();
 
-        if max_calls == 0 || period_ledgers == 0 {
+        if max_items == 0 || period_ledgers == 0 {
             panic_with_error!(e, MintQuotaError::ParamsInvalid);
         }
 
         let key = DataKey::Params(smart_account.clone(), context_rule.id);
         let params = MintQuotaParams {
-            max_calls,
+            max_items,
             period_ledgers,
         };
         e.storage().persistent().set(&key, &params);
@@ -259,7 +312,7 @@ impl MintQuotaPolicyContract {
         QuotaInstalled {
             smart_account,
             context_rule_id: context_rule.id,
-            max_calls,
+            max_items,
             period_ledgers,
         }
         .publish(e);
