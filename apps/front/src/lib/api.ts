@@ -133,6 +133,30 @@ export interface SessionItem {
   createdAt: string;
 }
 
+/** Upload de mídia: multipart, sem Content-Type manual (o browser põe o boundary). */
+export async function uploadMedia(file: File): Promise<{ url: string; byteSize: number }> {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('publishableKey', PUBLISHABLE_KEY);
+
+  const response = await fetch(`${API_URL}/v1/media`, {
+    method: 'POST',
+    credentials: 'include',
+    body: form,
+  });
+
+  const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok) {
+    throw new ApiError(
+      (body.error as string) ?? 'Não deu para enviar o arquivo.',
+      (body.errorCode as string) ?? 'UNKNOWN',
+      response.status,
+      body,
+    );
+  }
+  return { url: body.url as string, byteSize: body.byteSize as number };
+}
+
 export const endpoints = {
   registerAccount: (body: {
     contractId: string;

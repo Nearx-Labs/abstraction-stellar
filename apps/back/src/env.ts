@@ -42,6 +42,8 @@ const schema = z
     RPC_URL: z.string().url().default('https://soroban-testnet.stellar.org'),
     NETWORK_PASSPHRASE: z.string().default('Test SDF Network ; September 2015'),
     FRIENDBOT_URL: z.string().url().default('https://friendbot.stellar.org'),
+    /** URL pública do próprio serviço — entra nas URIs de mídia gravadas no contrato. */
+    PUBLIC_URL: z.string().url().default('http://localhost:8080'),
 
     // Contratos
     TREASURY_CONTRACT_ID: z.string().optional(),
