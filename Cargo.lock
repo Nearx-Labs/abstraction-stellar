@@ -458,6 +458,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8"
 
 [[package]]
+name = "demo-ledger"
+version = "0.0.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "der"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -975,6 +982,14 @@ dependencies = [
  "stellar-accounts",
  "stellar-contract-utils",
  "stellar-macros",
+]
+
+[[package]]
+name = "mint-quota-policy"
+version = "0.0.0"
+dependencies = [
+ "soroban-sdk",
+ "stellar-accounts",
 ]
 
 [[package]]

@@ -1,0 +1,64 @@
+# Stack local completa: banco + back + front.
+#
+#   docker compose up --build
+#
+# Substitui o start-demo.sh, que subia três processos com `npm run dev` e
+# dependia de identidades criadas à mão no stellar CLI.
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: abstraction
+      POSTGRES_PASSWORD: abstraction
+      POSTGRES_DB: abstraction
+    ports:
+      - '5434:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U abstraction -d abstraction']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  back:
+    build:
+      context: ./apps/back
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: '8080'
+      DATABASE_URL: postgres://abstraction:abstraction@db:5432/abstraction
+      RPC_URL: ${RPC_URL:-https://soroban-testnet.stellar.org}
+      NETWORK_PASSPHRASE: ${NETWORK_PASSPHRASE:-Test SDF Network ; September 2015}
+      TREASURY_CONTRACT_ID: ${TREASURY_CONTRACT_ID:-CDKC5JHDED55KNI7U7AEJMZN6NLOYIASUWXPAV2QE74SMZ4VEFM7NKOV}
+      XLM_SAC_ADDRESS: ${XLM_SAC_ADDRESS:-CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC}
+      # Em desenvolvimento as chaves são derivadas de forma determinística e
+      # financiadas no friendbot no boot. Em produção, todas obrigatórias.
+      CHANNEL_SECRETS: ${CHANNEL_SECRETS:-}
+      TREASURY_OPERATOR_SECRET: ${TREASURY_OPERATOR_SECRET:-}
+      TREASURY_OWNER_SECRET: ${TREASURY_OWNER_SECRET:-}
+      FAUCET_SECRET: ${FAUCET_SECRET:-}
+      ISSUER_SEED_HEX: ${ISSUER_SEED_HEX:-}
+      SUBJECT_SALT: ${SUBJECT_SALT:-abstraction-dev-salt}
+      RP_ID: ${RP_ID:-localhost}
+      RP_ORIGINS: ${RP_ORIGINS:-http://localhost:5173}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - '8080:8080'
+
+  front:
+    build:
+      context: ./apps/front
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8080}
+        VITE_PUBLISHABLE_KEY: ${VITE_PUBLISHABLE_KEY:-pk_test_dev}
+    depends_on:
+      - back
+    ports:
+      - '5173:8080'
+
+volumes:
+  pgdata:

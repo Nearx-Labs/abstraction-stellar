@@ -1,0 +1,76 @@
+@import 'tailwindcss';
+
+/* Tema único escuro. A conta é sobre dinheiro e chave criptográfica: o
+   contraste alto e a paleta fria reduzem ruído; o mint é reservado para a
+   ação principal e para "está tudo certo". */
+@theme {
+  --color-bg: #0d0f0e;
+  --color-surface: #141817;
+  --color-surface-2: #1b2120;
+  --color-border: #263230;
+  --color-fg: #e8f0ed;
+  --color-muted: #8ba39c;
+
+  --color-primary: #4bbf7a;
+  --color-primary-fg: #06120c;
+  --color-primary-dim: #2f7c50;
+
+  --color-warning: #e0b341;
+  --color-danger: #e05f5f;
+
+  --radius-card: 1.25rem;
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--color-bg);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    margin: 0;
+    min-height: 100dvh;
+  }
+
+  /* Números de saldo e endereço não devem "dançar" enquanto atualizam. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background-color: var(--color-surface-2);
+}
+
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background-image: linear-gradient(
+    90deg,
+    transparent,
+    rgb(255 255 255 / 0.04),
+    transparent
+  );
+  animation: shimmer 1.6s infinite;
+}
