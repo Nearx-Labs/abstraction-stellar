@@ -4,9 +4,9 @@
 // de autorização inteira (o `execute` da conta + o `owner.require_auth()` do
 // ledger), a passkey assina, e o relayer patrocina. É o circuito completo da
 // abstração de conta num caso de uso concreto.
-import { Address, nativeToScVal, xdr } from '@stellar/stellar-sdk';
 import type { SmartAccountKit } from 'smart-account-kit';
 import { CONFIG } from './config';
+import { invokeWithAppKey } from './appKey';
 
 /** Tetos espelhados de contracts/demo-ledger/src/contract.rs. */
 export const LIMITS = {
@@ -41,57 +41,43 @@ export function newUuid(): string {
   return crypto.randomUUID();
 }
 
-function fieldsToScVal(fields: CustomField[]): xdr.ScVal {
-  // O host valida a ordem das chaves do mapa; `scvSortedMap` cuida disso.
-  return xdr.scvSortedMap(
-    fields.map(
-      (field) =>
-        new xdr.ScMapEntry({
-          key: nativeToScVal(field.key, { type: 'string' }),
-          val: nativeToScVal(field.value, { type: 'string' }),
-        }),
-    ),
-  );
+/** O spec do contrato converte um Map JS para o `Map<String,String>` do Soroban. */
+function fieldsToMap(fields: CustomField[]): Map<string, string> {
+  return new Map(fields.map((field) => [field.key, field.value]));
 }
 
 export interface MintOutcome {
-  hash?: string;
-  success: boolean;
-  error?: { code?: string; message?: string };
+  hash: string;
+  /** True quando a permissão do app foi concedida agora (houve uma digital). */
+  granted: boolean;
 }
 
+/** Registra um item. Assina com a chave do app — sem digital, depois do 1º grant. */
 export async function mintRecord(
   kit: SmartAccountKit,
   smartAccount: string,
   input: MintInput,
 ): Promise<MintOutcome> {
-  const args = [
-    new Address(smartAccount).toScVal(),
-    nativeToScVal(input.uuid, { type: 'string' }),
-    nativeToScVal(input.name, { type: 'string' }),
-    nativeToScVal(input.uri, { type: 'string' }),
-    fieldsToScVal(input.fields),
-  ];
-
-  const result = (await kit.executeAndSubmit(
-    CONFIG.demoLedgerAddress,
-    'mint',
-    args,
-  )) as unknown as MintOutcome;
-
-  return result;
+  return invokeWithAppKey(kit, smartAccount, CONFIG.demoLedgerAddress, 'mint', {
+    owner: smartAccount,
+    uuid: input.uuid,
+    name: input.name,
+    uri: input.uri,
+    fields: fieldsToMap(input.fields),
+  });
 }
 
-/** Transfere a posse — é a venda do marketplace. Exige auth do dono atual. */
+/** Transfere a posse — é a venda do marketplace. */
 export async function transferRecord(
   kit: SmartAccountKit,
+  smartAccount: string,
   uuid: string,
   to: string,
 ): Promise<MintOutcome> {
-  return (await kit.executeAndSubmit(CONFIG.demoLedgerAddress, 'transfer', [
-    nativeToScVal(uuid, { type: 'string' }),
-    new Address(to).toScVal(),
-  ])) as unknown as MintOutcome;
+  return invokeWithAppKey(kit, smartAccount, CONFIG.demoLedgerAddress, 'transfer', {
+    uuid,
+    to,
+  });
 }
 
 /** Validação local — a mesma que o contrato aplica, para falhar antes da fee. */

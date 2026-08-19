@@ -75,18 +75,10 @@ export function MintPage({ address }: { address: string }) {
   const validationError = validateMint({ uuid, name, uri: '', fields });
 
   const mint = useMutation({
-    mutationFn: async () => {
-      const result = await mintRecord(kit, address, input);
-      if (!result.success) {
-        throw new Error(result.error?.message ?? 'O contrato recusou o mint.');
-      }
-      return result;
-    },
+    mutationFn: () => mintRecord(kit, address, input),
     onSuccess: (result) => {
-      toast.success('Registrado no ledger.', {
-        action: result.hash
-          ? { label: 'Ver transação', onClick: () => window.open(txUrl(result.hash!), '_blank') }
-          : undefined,
+      toast.success(result.granted ? 'Permissão concedida e item registrado.' : 'Registrado no ledger.', {
+        action: { label: 'Ver transação', onClick: () => window.open(txUrl(result.hash), '_blank') },
       });
       setUuid(newUuid());
       setName('');
@@ -101,19 +93,13 @@ export function MintPage({ address }: { address: string }) {
   });
 
   const transfer = useMutation({
-    mutationFn: async () => {
+    mutationFn: () => {
       if (!transferTarget) throw new Error('nenhum item selecionado');
-      const result = await transferRecord(kit, transferTarget.uuid, transferTo);
-      if (!result.success) {
-        throw new Error(result.error?.message ?? 'O contrato recusou a transferência.');
-      }
-      return result;
+      return transferRecord(kit, address, transferTarget.uuid, transferTo);
     },
     onSuccess: (result) => {
       toast.success('Posse transferida.', {
-        action: result.hash
-          ? { label: 'Ver transação', onClick: () => window.open(txUrl(result.hash!), '_blank') }
-          : undefined,
+        action: { label: 'Ver transação', onClick: () => window.open(txUrl(result.hash), '_blank') },
       });
       setTransferTarget(null);
       void queryClient.invalidateQueries({ queryKey: ['ledger'] });

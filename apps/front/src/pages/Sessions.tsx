@@ -23,14 +23,23 @@ import {
 import { endpoints, type SessionItem } from '@/lib/api';
 import { CONFIG } from '@/lib/config';
 import { kit } from '@/lib/kit';
-import { grantSession, hasLiveKey, revokeSession } from '@/lib/session';
+import { grantSession, hasLiveKey, pruneSessions, revokeSession } from '@/lib/session';
 import { cn, formatDuration, formatXlm, truncateAddress, xlmToStroops } from '@/lib/utils';
 
 const LEDGERS_PER_HOUR = 720;
-const DURATIONS = [
-  { label: '1h', hours: 1 },
-  { label: '6h', hours: 6 },
-  { label: '24h', hours: 24 },
+
+/** Janela em que o teto de gasto se renova — o análogo de uma allowance periódica. */
+const WINDOWS = [
+  { label: 'por hora', hours: 1 },
+  { label: 'por dia', hours: 24 },
+  { label: 'por semana', hours: 24 * 7 },
+];
+
+/** Prazo do grant. "Nunca" é o normal: quem encerra é a revogação. */
+const EXPIRIES = [
+  { label: 'Nunca', hours: 0 },
+  { label: '24 horas', hours: 24 },
+  { label: '7 dias', hours: 24 * 7 },
 ];
 
 const TARGETS = [
@@ -46,7 +55,7 @@ function stateBadge(item: SessionItem) {
       </Badge>
     );
   }
-  if (item.state === 'expired' || item.expiresInSeconds <= 0) {
+  if (item.state === 'expired' || (item.expiresInSeconds !== null && item.expiresInSeconds <= 0)) {
     return (
       <Badge tone="muted">
         <Dot tone="muted" /> expirada
@@ -60,10 +69,17 @@ function stateBadge(item: SessionItem) {
       </Badge>
     );
   }
-  if (item.expiresInSeconds < 3600) {
+  if (item.expiresInSeconds !== null && item.expiresInSeconds < 3600) {
     return (
       <Badge tone="warning">
         <Dot tone="warning" /> expira em {formatDuration(item.expiresInSeconds)}
+      </Badge>
+    );
+  }
+  if (item.expiresInSeconds === null) {
+    return (
+      <Badge tone="primary">
+        <Dot tone="primary" /> ativa · sem prazo
       </Badge>
     );
   }
@@ -83,11 +99,23 @@ export function SessionsPage({ address }: { address: string }) {
   const [target, setTarget] = useState(CONFIG.xlmSacAddress);
   const [customTarget, setCustomTarget] = useState('');
   const [limit, setLimit] = useState('10');
-  const [hours, setHours] = useState(1);
+  const [windowHours, setWindowHours] = useState(24);
+  const [expiryHours, setExpiryHours] = useState(0);
 
   const { data, isPending } = useQuery({
     queryKey: ['sessions', address],
-    queryFn: () => endpoints.sessions(address),
+    queryFn: async () => {
+      const result = await endpoints.sessions(address);
+      // Descarta chaves locais de regras que já não existem mais on-chain.
+      pruneSessions(
+        address,
+        result.items
+          .filter((item) => item.state === 'active' || item.state === 'pending')
+          .map((item) => item.contextRuleId)
+          .filter((id): id is number => id !== null),
+      );
+      return result;
+    },
     refetchInterval: 20_000,
   });
 
@@ -100,8 +128,9 @@ export function SessionsPage({ address }: { address: string }) {
   const create = useMutation({
     mutationFn: () =>
       grantSession(kit, address, resolvedTarget, {
-        ttlLedgers: LEDGERS_PER_HOUR * hours,
+        periodLedgers: LEDGERS_PER_HOUR * windowHours,
         spendingLimit: xlmToStroops(limit.replace(',', '.')),
+        ttlLedgers: expiryHours > 0 ? LEDGERS_PER_HOUR * expiryHours : undefined,
         name: name.trim(),
       }),
     onSuccess: () => {
@@ -123,7 +152,7 @@ export function SessionsPage({ address }: { address: string }) {
     onError: (error: Error) => toast.error(error.message),
   });
 
-  const expiresAt = new Date(Date.now() + hours * 3600_000);
+  const expiresAt = expiryHours > 0 ? new Date(Date.now() + expiryHours * 3600_000) : null;
 
   return (
     <>
@@ -166,7 +195,7 @@ export function SessionsPage({ address }: { address: string }) {
                 remaining === null || spendingLimit === 0n
                   ? 0
                   : Number(((spendingLimit - remaining) * 100n) / spendingLimit);
-              const live = hasLiveKey(item.contextRuleId);
+              const live = hasLiveKey(address, item.contextRuleId);
               const revocable =
                 item.contextRuleId !== null &&
                 item.state !== 'revoked' &&
@@ -186,7 +215,7 @@ export function SessionsPage({ address }: { address: string }) {
                     </p>
                     {!live && item.state === 'active' && (
                       <p className="mt-1 text-xs text-warning">
-                        chave não está nesta aba — só dá para revogar
+                        a chave deste grant não está neste navegador — só dá para revogar
                       </p>
                     )}
                   </div>
@@ -291,15 +320,40 @@ export function SessionsPage({ address }: { address: string }) {
             />
           </Field>
 
-          <Field label="Duração">
+          <Field
+            label="Janela do limite"
+            hint="O teto se renova sozinho a cada janela — não é um saldo que acaba."
+          >
             <div className="flex gap-2">
-              {DURATIONS.map((option) => (
+              {WINDOWS.map((option) => (
                 <button
                   key={option.hours}
-                  onClick={() => setHours(option.hours)}
+                  onClick={() => setWindowHours(option.hours)}
                   className={cn(
                     'flex-1 rounded-xl border px-3 py-2 text-sm transition-colors',
-                    hours === option.hours
+                    windowHours === option.hours
+                      ? 'border-primary/60 bg-primary/10 text-fg'
+                      : 'border-border text-muted hover:text-fg',
+                  )}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </Field>
+
+          <Field
+            label="Prazo do grant"
+            hint="Opcional. Sem prazo, a permissão vale até você revogar."
+          >
+            <div className="flex gap-2">
+              {EXPIRIES.map((option) => (
+                <button
+                  key={option.hours}
+                  onClick={() => setExpiryHours(option.hours)}
+                  className={cn(
+                    'flex-1 rounded-xl border px-3 py-2 text-sm transition-colors',
+                    expiryHours === option.hours
                       ? 'border-primary/60 bg-primary/10 text-fg'
                       : 'border-border text-muted hover:text-fg',
                   )}
@@ -311,16 +365,25 @@ export function SessionsPage({ address }: { address: string }) {
           </Field>
 
           <p className="text-xs text-muted">
-            A sessão vai valer até{' '}
-            <strong className="text-fg">
-              {expiresAt.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}
-            </strong>{' '}
-            e gastar no máximo <strong className="text-fg">{limit} XLM</strong>.
+            O app poderá gastar no máximo <strong className="text-fg">{limit} XLM</strong>{' '}
+            {WINDOWS.find((w) => w.hours === windowHours)?.label}, só no contrato escolhido, e{' '}
+            {expiresAt ? (
+              <>
+                até{' '}
+                <strong className="text-fg">
+                  {expiresAt.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}
+                </strong>
+              </>
+            ) : (
+              <strong className="text-fg">até você revogar</strong>
+            )}
+            .
           </p>
 
-          <Alert>
-            Esta sessão vive só nesta aba. Se você recarregar a página, ela continua válida
-            on-chain mas você perde a chave — revogue e crie outra.
+          <Alert tone="primary">
+            A chave fica guardada neste navegador, então o grant continua funcionando depois de
+            recarregar a página. Ela só fala com o contrato acima e respeita o teto — mas em um
+            computador compartilhado, revogue ao terminar.
           </Alert>
         </div>
       </Modal>

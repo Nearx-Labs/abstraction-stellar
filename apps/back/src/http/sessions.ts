@@ -29,7 +29,9 @@ sessionRoutes.get('/accounts/:address/sessions', requireCaller(), async (c) => {
           ? null
           : await getSpendingLimitData(row.policyAddress, row.contextRuleId, address);
 
-      const remainingLedgers = Number(row.validUntilLedger) - ledger;
+      // Sem prazo, não há contagem regressiva: o grant vale até ser revogado.
+      const remainingLedgers =
+        row.validUntilLedger === null ? null : Number(row.validUntilLedger) - ledger;
       return {
         id: row.id,
         contextRuleId: row.contextRuleId,
@@ -42,8 +44,9 @@ sessionRoutes.get('/accounts/:address/sessions', requireCaller(), async (c) => {
         remainingStroops: budget
           ? (budget.spendingLimit - budget.totalSpent).toString()
           : null,
-        validUntilLedger: row.validUntilLedger.toString(),
-        expiresInSeconds: remainingLedgers > 0 ? remainingLedgers * LEDGER_SECONDS : 0,
+        validUntilLedger: row.validUntilLedger === null ? null : row.validUntilLedger.toString(),
+        expiresInSeconds:
+          remainingLedgers === null ? null : Math.max(remainingLedgers, 0) * LEDGER_SECONDS,
         grantTxHash: row.grantTxHash,
         createdAt: row.createdAt.toISOString(),
       };
@@ -69,7 +72,8 @@ sessionRoutes.post('/accounts/:address/sessions', requireCaller(), async (c) => 
     policyAddress?: string;
     spendingLimitStroops?: string;
     periodLedgers?: number;
-    validUntilLedger?: string;
+    /** Ausente ou null = grant sem prazo. */
+    validUntilLedger?: string | null;
     grantTxHash?: string;
   }>();
 
@@ -80,8 +84,7 @@ sessionRoutes.post('/accounts/:address/sessions', requireCaller(), async (c) => 
     !body.ed25519PublicKey ||
     !body.policyAddress ||
     !body.spendingLimitStroops ||
-    !body.periodLedgers ||
-    !body.validUntilLedger
+    !body.periodLedgers
   ) {
     return c.json(
       { success: false, error: 'campos obrigatórios ausentes', errorCode: 'INVALID_PARAMS' },
@@ -98,10 +101,16 @@ sessionRoutes.post('/accounts/:address/sessions', requireCaller(), async (c) => 
   }
 
   const ledger = await currentLedger();
-  const validUntilLedger = BigInt(body.validUntilLedger);
-  const validUntilEst = new Date(
-    Date.now() + Math.max(Number(validUntilLedger) - ledger, 0) * LEDGER_SECONDS * 1000,
-  );
+  const validUntilLedger =
+    body.validUntilLedger === undefined || body.validUntilLedger === null
+      ? null
+      : BigInt(body.validUntilLedger);
+  const validUntilEst =
+    validUntilLedger === null
+      ? null
+      : new Date(
+          Date.now() + Math.max(Number(validUntilLedger) - ledger, 0) * LEDGER_SECONDS * 1000,
+        );
 
   const created = await grants.create({
     appId: caller.appId,

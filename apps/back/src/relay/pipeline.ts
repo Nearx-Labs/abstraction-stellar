@@ -9,7 +9,7 @@
 // furarem o teto; liquidar depois é o que faz a conta fechar pelo `feeCharged`
 // e não pelo teto.
 import { xdr } from '@stellar/stellar-sdk';
-import { tx } from '../db/pool.js';
+import { pool, tx } from '../db/pool.js';
 import { logger } from '../logger.js';
 import { env } from '../env.js';
 import type { ResolvedApp } from '../db/queries/apps.js';
@@ -216,6 +216,28 @@ export async function relay(
         status: 'deployed',
         deployTxHash: outcome.hash,
       });
+
+      // A conta acabou de nascer e o patrocínio do próprio deploy já vai ser
+      // debitado nela. Sem allowance, esse débito falharia com NoAllowance e
+      // ficaria preso no outbox — a conta existe, foi patrocinada, então recebe
+      // a cota agora, sem depender de passar pelo faucet antes.
+      if (app.treasuryId) {
+        const expiresAt =
+          BigInt(Math.floor(Date.now() / 1000)) + BigInt(env.ALLOWANCE_TTL_DAYS) * 86_400n;
+        await outbox.enqueue(pool, {
+          appId: app.id,
+          kind: 'set_allowance',
+          dedupeKey: `set_allowance:${intent.user}:deploy`,
+          payload: {
+            appId: app.id,
+            treasuryId: app.treasuryId,
+            user: intent.user,
+            maxPerTx: env.ALLOWANCE_MAX_PER_TX.toString(),
+            maxPerDay: env.ALLOWANCE_MAX_PER_DAY.toString(),
+            expiresAt: expiresAt.toString(),
+          },
+        });
+      }
     }
 
     if (outcome.status !== 'SUCCESS') {

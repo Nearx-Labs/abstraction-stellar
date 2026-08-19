@@ -19,7 +19,8 @@ export interface SessionGrant {
   policyAddress: string;
   spendingLimitStroops: bigint;
   periodLedgers: number;
-  validUntilLedger: bigint;
+  /** null = grant sem prazo; quem encerra é a revogação. */
+  validUntilLedger: bigint | null;
   validUntilEst: Date | null;
   state: SessionState;
   grantTxHash: string | null;
@@ -42,7 +43,7 @@ const map = (r: any): SessionGrant => ({
   policyAddress: r.policy_address,
   spendingLimitStroops: BigInt(r.spending_limit_stroops),
   periodLedgers: r.period_ledgers,
-  validUntilLedger: BigInt(r.valid_until_ledger),
+  validUntilLedger: r.valid_until_ledger === null ? null : BigInt(r.valid_until_ledger),
   validUntilEst: r.valid_until_est,
   state: r.state,
   grantTxHash: r.grant_tx_hash,
@@ -60,7 +61,8 @@ export async function create(input: {
   policyAddress: string;
   spendingLimitStroops: bigint;
   periodLedgers: number;
-  validUntilLedger: bigint;
+  /** null = grant sem prazo; quem encerra é a revogação. */
+  validUntilLedger: bigint | null;
   validUntilEst: Date | null;
   grantTxHash: string | null;
 }): Promise<SessionGrant> {
@@ -85,7 +87,7 @@ export async function create(input: {
       input.policyAddress,
       input.spendingLimitStroops.toString(),
       input.periodLedgers,
-      input.validUntilLedger.toString(),
+      input.validUntilLedger === null ? null : input.validUntilLedger.toString(),
       input.validUntilEst,
       input.grantTxHash,
     ],

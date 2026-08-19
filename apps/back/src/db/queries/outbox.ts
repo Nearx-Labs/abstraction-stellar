@@ -82,10 +82,22 @@ export async function succeed(id: string, txHash: string): Promise<void> {
 }
 
 const MAX_ATTEMPTS = 8;
+/** Uma condição que outro processo conserta merece muito mais paciência. */
+const MAX_ATTEMPTS_TRANSIENT = 40;
+
+/**
+ * Erros que passam sozinhos, e por isso não devem matar o job.
+ *
+ * NoAllowance (5101) é o caso real: um débito feito antes de a conta ter
+ * allowance no Treasury falharia 8 vezes e morreria — perdendo o registro
+ * auditável — mesmo com o reconciliador de allowance prestes a provisionar.
+ */
+const TRANSIENT_CONTRACT_ERRORS = ['#5101'];
 
 /** Backoff exponencial com teto; depois de MAX_ATTEMPTS a linha vira `dead`. */
 export async function fail(id: string, attempts: number, error: string): Promise<void> {
-  const dead = attempts >= MAX_ATTEMPTS;
+  const transient = TRANSIENT_CONTRACT_ERRORS.some((code) => error.includes(code));
+  const dead = attempts >= (transient ? MAX_ATTEMPTS_TRANSIENT : MAX_ATTEMPTS);
   const backoffSeconds = Math.min(2 ** attempts * 5, 3600);
   await pool.query(
     `UPDATE treasury_outbox

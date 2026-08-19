@@ -14,6 +14,7 @@ import {
 import { APP_NAME } from '@/lib/config';
 import { kit, normalizeCreated, openPanelSession } from '@/lib/kit';
 import { endpoints } from '@/lib/api';
+import { restoreSessions } from '@/lib/session';
 
 export type WalletStage =
   | 'idle'
@@ -54,7 +55,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       .connectWallet()
       .then((restored) => {
         if (cancelled) return;
-        if (restored?.contractId) setContractId(restored.contractId);
+        if (restored?.contractId) {
+          setContractId(restored.contractId);
+          // Recarrega no kit as chaves de grant guardadas neste navegador —
+          // é o que faz um grant sem prazo continuar utilizável após reload.
+          restoreSessions(kit, restored.contractId);
+        }
         setStage('idle');
       })
       .catch(() => {
@@ -110,6 +116,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       const result = await kit.connectWallet({ prompt: true });
       if (!result?.contractId) throw new Error('Nenhuma conta encontrada para esta passkey.');
       setContractId(result.contractId);
+      restoreSessions(kit, result.contractId);
       await openPanelSession(result.contractId);
       setStage('ready');
     } catch (error) {

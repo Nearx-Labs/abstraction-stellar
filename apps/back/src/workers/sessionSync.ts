@@ -20,8 +20,11 @@ async function tick(): Promise<void> {
     if (grant.contextRuleId === null) {
       // Grant registrado sem o rule id (o cliente não conseguiu lê-lo na
       // resposta). Sem id não há o que reconciliar; expira pelo relógio.
-      if (Number(grant.validUntilLedger) < ledger) await grants.setState(grant.id, 'expired');
-      else await grants.touchSynced(grant.id);
+      if (grant.validUntilLedger !== null && Number(grant.validUntilLedger) < ledger) {
+        await grants.setState(grant.id, 'expired');
+      } else {
+        await grants.touchSynced(grant.id);
+      }
       continue;
     }
 
@@ -36,7 +39,8 @@ async function tick(): Promise<void> {
       continue;
     }
 
-    if (Number(grant.validUntilLedger) < ledger) {
+    // Grant sem prazo só sai por revogação — a checagem acima já cobriu isso.
+    if (grant.validUntilLedger !== null && Number(grant.validUntilLedger) < ledger) {
       await grants.setState(grant.id, 'expired');
       continue;
     }

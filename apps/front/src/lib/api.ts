@@ -127,8 +127,8 @@ export interface SessionItem {
   spendingLimitStroops: string;
   spentStroops: string | null;
   remainingStroops: string | null;
-  validUntilLedger: string;
-  expiresInSeconds: number;
+  validUntilLedger: string | null;
+  expiresInSeconds: number | null;
   grantTxHash: string | null;
   createdAt: string;
 }

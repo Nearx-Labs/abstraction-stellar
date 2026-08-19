@@ -7,6 +7,7 @@ import { Send } from 'lucide-react';
 import { Button, Card, CardTitle, Field, Input } from '@/components/ui';
 import { CONFIG, txUrl } from '@/lib/config';
 import { kit } from '@/lib/kit';
+import { transferWithAppKey } from '@/lib/appKey';
 
 const DEMO_RECIPIENT = 'GBKMZQWUCKIGARWNLOQFFMWUJSTY6FAIDT73EZOQK5A5HFGXBBSBE72Z';
 
@@ -23,27 +24,24 @@ export function TransferCard({ address }: { address: string }) {
   const [recipient, setRecipient] = useState(DEMO_RECIPIENT);
 
   const transfer = useMutation({
-    mutationFn: async () => {
-      const result = await kit.transfer(CONFIG.xlmSacAddress, recipient, Number(amount));
-      if (!result.success) {
-        const error = (result as unknown as { error?: { code?: string; message?: string } }).error;
-        throw Object.assign(new Error(error?.message ?? 'Transferência recusada'), {
-          code: error?.code,
-        });
-      }
-      return result;
-    },
+    // Assina com a chave do app: a digital só aparece na primeira vez, quando o
+    // grant para o contrato do XLM é concedido.
+    mutationFn: () =>
+      transferWithAppKey(kit, address, CONFIG.xlmSacAddress, recipient, Number(amount)),
     onSuccess: (result) => {
-      toast.success('Enviado — a taxa foi por nossa conta.', {
-        action: result.hash
-          ? { label: 'Ver transação', onClick: () => window.open(txUrl(result.hash!), '_blank') }
-          : undefined,
-      });
+      toast.success(
+        result.granted
+          ? 'Permissão concedida e valor enviado — a taxa foi por nossa conta.'
+          : 'Enviado — a taxa foi por nossa conta.',
+        {
+          action: { label: 'Ver transação', onClick: () => window.open(txUrl(result.hash), '_blank') },
+        },
+      );
       void queryClient.invalidateQueries({ queryKey: ['usage', address] });
       void queryClient.invalidateQueries({ queryKey: ['account', address] });
     },
-    onError: (error: Error & { code?: string }) => {
-      toast.error(ERROR_COPY[error.code ?? ''] ?? error.message);
+    onError: (error: Error & { code?: string | number }) => {
+      toast.error(ERROR_COPY[String(error.code ?? '')] ?? error.message);
       void queryClient.invalidateQueries({ queryKey: ['usage', address] });
     },
   });
@@ -79,7 +77,7 @@ export function TransferCard({ address }: { address: string }) {
           onClick={() => transfer.mutate()}
         >
           {!transfer.isPending && <Send className="size-4" />}
-          {transfer.isPending ? 'Assinando com a passkey…' : 'Enviar (taxa por nossa conta)'}
+          {transfer.isPending ? 'Enviando…' : 'Enviar (taxa por nossa conta)'}
         </Button>
       </div>
     </Card>
