@@ -90,6 +90,9 @@ jobs:
       # Duas cópias do stellar-sdk fazem o Spec do kit rejeitar os ScVal que
       # este app constrói, com um erro que não diz nada sobre versão.
       - run: npm run check-sdk
+      # Campos tipados como Val no contrato só aceitam ScVal pronto; o erro que
+      # sai quando não é não aponta para a causa.
+      - run: npm run check-args
       - run: npm run typecheck
       - run: npm run build
 

@@ -7,13 +7,13 @@
 //
 // O serviço não pode se conceder poder: quem assina esta transação é o dono da
 // conta.
-import { nativeToScVal, xdr } from '@stellar/stellar-sdk';
 import {
   createCallContractContext,
   createEd25519Signer,
   type SmartAccountKit,
 } from 'smart-account-kit';
 import { api } from './api';
+import { mintQuotaParams } from './policyParams';
 
 export interface MasterState {
   masterAccount: string | null;
@@ -33,21 +33,6 @@ export interface MasterState {
     remaining: number;
     windowResetsAtLedger: number;
   } | null;
-}
-
-/** `MintQuotaParams { max_items: u32, period_ledgers: u32 }`. */
-function quotaParams(maxItems: number, periodLedgers: number): xdr.ScVal {
-  // O host valida a ordem das chaves do mapa; scvSortedMap resolve.
-  return xdr.scvSortedMap([
-    new xdr.ScMapEntry({
-      key: xdr.ScVal.scvSymbol('max_items'),
-      val: nativeToScVal(maxItems, { type: 'u32' }),
-    }),
-    new xdr.ScMapEntry({
-      key: xdr.ScVal.scvSymbol('period_ledgers'),
-      val: nativeToScVal(periodLedgers, { type: 'u32' }),
-    }),
-  ]);
 }
 
 export const masterApi = {
@@ -86,7 +71,7 @@ export async function grantMintPermission(
   );
 
   const policies = new Map<string, unknown>([
-    [state.policyContract, quotaParams(maxItems, periodLedgers)],
+    [state.policyContract, mintQuotaParams(maxItems, periodLedgers)],
   ]);
 
   const tx = await kit.rules.add(

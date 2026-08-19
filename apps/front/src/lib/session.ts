@@ -14,13 +14,13 @@ import { Keypair, rpc } from '@stellar/stellar-sdk';
 import {
   createCallContractContext,
   createEd25519Signer,
-  createSpendingLimitParams,
   LEDGERS_PER_HOUR,
   type SelectedSigner,
   type SmartAccountKit,
 } from 'smart-account-kit';
 import { CONFIG } from './config';
 import { endpoints } from './api';
+import { spendingLimitParams } from './policyParams';
 
 export interface SessionGrant {
   ruleId: number | null;
@@ -76,8 +76,10 @@ export async function grantSession(
     CONFIG.ed25519VerifierAddress,
     keypair.rawPublicKey(),
   );
+  // Os params vão como ScVal: o `Spec` não converte objeto simples para `Val`,
+  // e é isso que o `createSpendingLimitParams` do kit devolve.
   const policies = new Map<string, unknown>([
-    [CONFIG.spendingLimitPolicyAddress, createSpendingLimitParams(limit, ttl)],
+    [CONFIG.spendingLimitPolicyAddress, spendingLimitParams(limit, ttl)],
   ]);
 
   const tx = await kit.rules.add(
