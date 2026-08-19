@@ -22,6 +22,15 @@ export interface StoredSession {
   publicKey: string;
   name: string;
   targetContract: string;
+  /**
+   * Policy instalada na regra.
+   *
+   * Guardado porque a policy errada torna o grant inútil sem que nada aqui
+   * perceba: uma regra de contrato não-token com a spending-limit instalada
+   * recusa toda chamada com NotAllowed (3223). Comparar isto é o que permite
+   * descartar um grant assim e refazê-lo.
+   */
+  policyAddress?: string;
   createdAt: number;
 }
 

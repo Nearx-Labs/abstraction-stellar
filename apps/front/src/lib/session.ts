@@ -15,7 +15,7 @@
 // prazo não faria sentido: recarregar a página perderia a chave e deixaria a
 // regra viva on-chain sem ninguém para usá-la — foi por isso que a versão
 // anterior precisava de prazo curto.
-import { Keypair, rpc } from '@stellar/stellar-sdk';
+import { Keypair, rpc, type xdr } from '@stellar/stellar-sdk';
 import {
   createCallContractContext,
   createEd25519Signer,
@@ -40,10 +40,18 @@ export interface SessionGrant {
 }
 
 export interface SessionOptions {
-  /** Janela do teto de gasto, em ledgers. Default: 1 dia. */
+  /** Janela do limite, em ledgers. Default: 1 dia. */
   periodLedgers?: number;
   /** Teto de gasto na janela, em stroops. Default: 10 XLM. */
   spendingLimit?: bigint;
+  /**
+   * Policy a instalar. Default: spending-limit.
+   *
+   * Não é detalhe: a spending-limit só entende `transfer` — qualquer outra
+   * função sob uma regra com ela instalada morre em NotAllowed (3223). Um
+   * contrato que não seja token precisa de outra policy.
+   */
+  policy?: { address: string; params: xdr.ScVal };
   /**
    * Prazo do grant, em ledgers. Omitir = sem prazo (o normal): quem encerra é
    * a revogação.
@@ -120,10 +128,13 @@ export async function grantSession(
   }
 
   const signer = createEd25519Signer(CONFIG.ed25519VerifierAddress, keypair.rawPublicKey());
+
   // Os params vão como ScVal: o `Spec` não converte objeto simples para `Val`.
-  const policies = new Map<string, unknown>([
-    [CONFIG.spendingLimitPolicyAddress, spendingLimitParams(limit, periodLedgers)],
-  ]);
+  const policy = options?.policy ?? {
+    address: CONFIG.spendingLimitPolicyAddress,
+    params: spendingLimitParams(limit, periodLedgers),
+  };
+  const policies = new Map<string, unknown>([[policy.address, policy.params]]);
 
   // O id precisa ser lido ANTES: a resposta da submissão não traz o retorno do
   // contrato, e o contador é monotônico — o próximo id é o valor atual.
@@ -151,6 +162,7 @@ export async function grantSession(
       publicKey: keypair.rawPublicKey().toString('hex'),
       name,
       targetContract,
+      policyAddress: policy.address,
       createdAt: Date.now(),
     });
   }
@@ -160,7 +172,7 @@ export async function grantSession(
     name,
     targetContract,
     ed25519PublicKey: keypair.rawPublicKey().toString('hex'),
-    policyAddress: CONFIG.spendingLimitPolicyAddress,
+    policyAddress: policy.address,
     spendingLimitStroops: limit.toString(),
     periodLedgers,
     validUntilLedger: validUntil === null ? null : String(validUntil),

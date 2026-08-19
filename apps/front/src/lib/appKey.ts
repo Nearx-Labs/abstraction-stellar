@@ -23,11 +23,36 @@ import type { SelectedSigner, SmartAccountKit } from 'smart-account-kit';
 import { CONFIG } from './config';
 import { xlmToStroops } from './utils';
 import { LEDGERS_PER_DAY, grantSession, signerFor } from './session';
+import { mintQuotaParams, spendingLimitParams } from './policyParams';
 import * as store from './sessionStore';
 import { ContractCallError, type SubmittedTx } from './submit';
 
-/** Teto padrão do grant: 100 XLM por dia, por contrato. */
+/** Teto padrão de gasto: 100 XLM por dia, para grants em contratos de token. */
 const DEFAULT_LIMIT = 1_000_000_000n;
+
+/** Teto padrão de volume: 10.000 registros por dia, para o ledger. */
+const DEFAULT_ITEM_LIMIT = 10_000;
+
+/**
+ * Escolhe a policy pelo contrato.
+ *
+ * A spending-limit só sabe metrificar `transfer`: sob uma regra com ela
+ * instalada, qualquer outra função morre em NotAllowed (3223). Um contrato que
+ * não é token precisa de um limite de VOLUME, não de valor — é o que a
+ * mint-quota-policy faz.
+ */
+function policyFor(targetContract: string, periodLedgers: number) {
+  if (targetContract === CONFIG.demoLedgerAddress) {
+    return {
+      address: CONFIG.mintQuotaPolicyAddress,
+      params: mintQuotaParams(DEFAULT_ITEM_LIMIT, periodLedgers),
+    };
+  }
+  return {
+    address: CONFIG.spendingLimitPolicyAddress,
+    params: spendingLimitParams(DEFAULT_LIMIT, periodLedgers),
+  };
+}
 
 const NAMES: Record<string, string> = {
   [CONFIG.xlmSacAddress]: 'Transferências (XLM)',
@@ -40,12 +65,22 @@ export interface AppKeyResult {
   granted: boolean;
 }
 
-/** Signer do app para um contrato, se o grant já existir neste navegador. */
+/**
+ * Signer do app para um contrato, se houver um grant USÁVEL neste navegador.
+ *
+ * Um grant com a policy errada é descartado em vez de reaproveitado: ele
+ * existe on-chain mas recusa toda chamada, e reusá-lo faria a tela repetir o
+ * mesmo erro para sempre. Grants gravados antes de a policy passar a ser
+ * registrada também caem aqui, por não dar para saber o que têm instalado.
+ */
 export function existingSigner(
   smartAccount: string,
   targetContract: string,
 ): SelectedSigner | null {
-  const stored = store.all(smartAccount).find((s) => s.targetContract === targetContract);
+  const expected = policyFor(targetContract, LEDGERS_PER_DAY).address;
+  const stored = store
+    .all(smartAccount)
+    .find((s) => s.targetContract === targetContract && s.policyAddress === expected);
   return stored ? signerFor(smartAccount, stored.ruleId) : null;
 }
 
@@ -67,6 +102,7 @@ export async function ensureAppKey(
     name: options?.name ?? NAMES[targetContract] ?? 'Permissão do app',
     spendingLimit: options?.limit ?? DEFAULT_LIMIT,
     periodLedgers: LEDGERS_PER_DAY,
+    policy: policyFor(targetContract, LEDGERS_PER_DAY),
     // Sem prazo: quem encerra é a revogação, como num grant de dApp.
   });
 
