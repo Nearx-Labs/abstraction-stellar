@@ -79,8 +79,13 @@ const schema = z
     FAUCET_AMOUNT_STROOPS: bigintish(100_000_000n), // 10 XLM
     FAUCET_COOLDOWN_HOURS: z.coerce.number().int().positive().default(24),
     FAUCET_MIN_BALANCE_STROOPS: bigintish(500_000_000n), // 50 XLM → FAUCET_DRY
-    ALLOWANCE_MAX_PER_TX: bigintish(5_000_000n), // 0.5 XLM
-    ALLOWANCE_MAX_PER_DAY: bigintish(20_000_000n), // 2 XLM
+    // Calibrado pelo custo real observado no testnet, não por chute: criar uma
+    // context rule com policy instalada e assinatura WebAuthn custa ~1,02 XLM
+    // (a assinatura é grande e a instalação escreve estado). Um teto de 0,5 XLM
+    // recusava a operação mais comum do produto, e um teto DIÁRIO de 2 XLM dava
+    // duas criações de regra por dia.
+    ALLOWANCE_MAX_PER_TX: bigintish(30_000_000n), // 3 XLM
+    ALLOWANCE_MAX_PER_DAY: bigintish(200_000_000n), // 20 XLM
     ALLOWANCE_TTL_DAYS: z.coerce.number().int().positive().default(365),
 
     // WebAuthn (sessão do painel)

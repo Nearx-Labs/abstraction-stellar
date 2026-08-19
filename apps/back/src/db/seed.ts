@@ -49,11 +49,17 @@ export async function seedDev(): Promise<void> {
        (app_id, max_fee_per_tx, max_fee_per_day, target_allowlist, allow_deploy, deploy_fee_cap)
      VALUES ($1, $2, $3, $4, true, $5)
      ON CONFLICT (app_id) DO UPDATE
-        SET target_allowlist = EXCLUDED.target_allowlist, updated_at = now()`,
+        SET target_allowlist = EXCLUDED.target_allowlist,
+            max_fee_per_tx   = EXCLUDED.max_fee_per_tx,
+            max_fee_per_day  = EXCLUDED.max_fee_per_day,
+            deploy_fee_cap   = EXCLUDED.deploy_fee_cap,
+            updated_at       = now()`,
     [
       appId,
-      '5000000', // 0.5 XLM por transação
-      '20000000', // 2 XLM por conta por dia
+      // Uma criação de context rule (policy + assinatura WebAuthn) custa
+      // ~1,02 XLM no testnet; abaixo disso o produto não funciona.
+      env.ALLOWANCE_MAX_PER_TX.toString(),
+      env.ALLOWANCE_MAX_PER_DAY.toString(),
       [env.XLM_SAC_ADDRESS, env.DEMO_LEDGER_CONTRACT_ID],
       '50000000', // 5 XLM de teto para o deploy
     ],

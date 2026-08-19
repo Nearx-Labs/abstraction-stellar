@@ -11,13 +11,62 @@ import { recordBalance } from '../db/queries/channels.js';
 import { allKeys } from '../chain/keys.js';
 import { classicBalance } from '../chain/sac.js';
 import { env } from '../env.js';
+import { pool } from '../db/pool.js';
+import * as outbox from '../db/queries/outbox.js';
 
 const TICK_MS = 30_000;
 
 /** Abaixo disso o serviço para em silêncio — é o alerta mais importante. */
 const LOW_BALANCE_STROOPS = 200_000_000n; // 20 XLM
 
+/**
+ * Reprovisiona allowances que ficaram abaixo do configurado.
+ *
+ * Sem isso, subir os tetos só valeria para contas novas: as antigas seguiriam
+ * com o valor antigo gravado no Treasury e o `consume` falharia com
+ * PerTxLimitExceeded — no outbox, longe da vista de quem usa.
+ */
+async function refreshStaleAllowances(): Promise<void> {
+  const stale = await pool.query<{ app_id: string; contract_id: string; treasury_id: string }>(
+    `SELECT a.app_id, a.contract_id, ap.treasury_id
+       FROM smart_accounts a
+       JOIN apps ap ON ap.id = a.app_id
+      WHERE a.allowance_set_at IS NOT NULL
+        AND ap.treasury_id <> ''
+        AND (a.allowance_max_per_tx  < $1 OR a.allowance_max_per_day < $2)
+      LIMIT 20`,
+    [env.ALLOWANCE_MAX_PER_TX.toString(), env.ALLOWANCE_MAX_PER_DAY.toString()],
+  );
+
+  for (const row of stale.rows) {
+    const expiresAt =
+      BigInt(Math.floor(Date.now() / 1000)) + BigInt(env.ALLOWANCE_TTL_DAYS) * 86_400n;
+    const queued = await outbox.enqueue(pool, {
+      appId: row.app_id,
+      kind: 'set_allowance',
+      // Uma reprovisão por conta por conjunto de tetos — não enfileira em loop.
+      dedupeKey: `set_allowance:${row.contract_id}:${env.ALLOWANCE_MAX_PER_TX}:${env.ALLOWANCE_MAX_PER_DAY}`,
+      payload: {
+        appId: row.app_id,
+        treasuryId: row.treasury_id,
+        user: row.contract_id,
+        maxPerTx: env.ALLOWANCE_MAX_PER_TX.toString(),
+        maxPerDay: env.ALLOWANCE_MAX_PER_DAY.toString(),
+        expiresAt: expiresAt.toString(),
+      },
+    });
+    if (queued) {
+      logger.info(
+        { account: row.contract_id, maxPerTx: env.ALLOWANCE_MAX_PER_TX },
+        'allowance desatualizada; reprovisionando',
+      );
+    }
+  }
+}
+
 async function tick(): Promise<void> {
+  await refreshStaleAllowances();
+
   const released = await reapStaleReservations();
   if (released > 0) logger.warn({ released }, 'reservas órfãs liberadas');
 
