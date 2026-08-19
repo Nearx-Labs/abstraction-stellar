@@ -14,7 +14,7 @@ import {
 } from 'smart-account-kit';
 import { api } from './api';
 import { mintQuotaParams } from './policyParams';
-import { confirmContextRule, nextContextRuleId, signAndSubmit } from './submit';
+import { findRuleForSigner, nextContextRuleId, signAndSubmit } from './submit';
 
 export interface MasterState {
   masterAccount: string | null;
@@ -87,7 +87,12 @@ export async function grantMintPermission(
   const result = await signAndSubmit(kit, tx);
 
   const grant: GrantResult = {
-    contextRuleId: await confirmContextRule(kit, expectedRuleId, name),
+    contextRuleId: await findRuleForSigner(
+      kit,
+      state.signer.publicKeyHex,
+      expectedRuleId,
+      state.ledgerContract,
+    ),
     txHash: result.hash,
   };
 

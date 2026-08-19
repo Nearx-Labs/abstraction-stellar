@@ -21,6 +21,7 @@
 import { contract } from '@stellar/stellar-sdk';
 import type { SelectedSigner, SmartAccountKit } from 'smart-account-kit';
 import { CONFIG } from './config';
+import { xlmToStroops } from './utils';
 import { LEDGERS_PER_DAY, grantSession, signerFor } from './session';
 import * as store from './sessionStore';
 import { ContractCallError, type SubmittedTx } from './submit';
@@ -97,7 +98,15 @@ function unwrap(result: unknown): SubmittedTx {
   return { hash: typed.hash!, ledger: typed.ledger };
 }
 
-/** Transfere um token assinando com a chave do app. */
+/**
+ * Transfere um token assinando com a chave do app.
+ *
+ * NÃO usa `kit.multiSigners.transfer`: por dentro ele roteia pelo
+ * `wallet.execute(...)`, e aí o contexto autorizado passa a ser
+ * `Contract(conta, "execute")` — que casa com a regra Default, não com
+ * `CallContract(token)`. O resultado seria justamente o que queremos evitar:
+ * pedir a passkey mesmo com o grant ativo. A chamada aqui é direta ao token.
+ */
 export async function transferWithAppKey(
   kit: SmartAccountKit,
   smartAccount: string,
@@ -105,9 +114,11 @@ export async function transferWithAppKey(
   recipient: string,
   amount: number,
 ): Promise<SubmittedTx & { granted: boolean }> {
-  const { signer, granted } = await ensureAppKey(kit, smartAccount, tokenContract);
-  const result = await kit.multiSigners.transfer(tokenContract, recipient, amount, [signer]);
-  return { ...unwrap(result), granted };
+  return invokeWithAppKey(kit, smartAccount, tokenContract, 'transfer', {
+    from: smartAccount,
+    to: recipient,
+    amount: xlmToStroops(String(amount)),
+  });
 }
 
 /**

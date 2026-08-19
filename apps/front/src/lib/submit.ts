@@ -58,21 +58,54 @@ export async function nextContextRuleId(kit: SmartAccountKit): Promise<number> {
 }
 
 /**
- * Confere que a regra criada é mesmo a que esperávamos.
+ * Acha a regra que autoriza uma chave Ed25519.
  *
- * Best-effort: se duas regras forem criadas ao mesmo tempo pela mesma conta, o
- * id previsto pode ser de outra. Falhar aqui não desfaz nada — só devolve null
- * para o registro nascer `pending` e o worker de sync resolver.
+ * Procurar pela CHAVE, e não pelo nome ou pelo id previsto, é o que torna isso
+ * confiável: a chave pública é única e está dentro do signer da regra. Conferir
+ * por nome falhava em silêncio quando o formato do retorno não batia — e o
+ * efeito era pior do que parece: sem id, a chave não era guardada, e cada ação
+ * criava um grant novo, pedindo a passkey de novo.
+ *
+ * Cai para o id previsto se a enumeração não achar nada (o probe do kit para no
+ * rule id 8).
  */
-export async function confirmContextRule(
+export async function findRuleForSigner(
   kit: SmartAccountKit,
-  expectedId: number,
-  expectedName: string,
+  publicKeyHex: string,
+  fallbackId: number,
+  targetContract: string,
 ): Promise<number | null> {
+  const wanted = publicKeyHex.toLowerCase();
+
   try {
-    const { result } = await kit.rules.get(expectedId);
-    const name = (result as { name?: string })?.name;
-    return name === expectedName ? expectedId : null;
+    // `getAll` exige um tipo de contexto; a chave do app sempre vive numa
+    // regra CallContract, então filtramos por ela.
+    const rules = await kit.rules.getAll({
+      tag: 'CallContract',
+      values: [targetContract],
+    } as never);
+    for (const rule of rules as Array<{ id: number; signers?: unknown[] }>) {
+      for (const signer of rule.signers ?? []) {
+        // Signer::External(verifier, key_data) — o key_data de um Ed25519 é a
+        // chave pública crua.
+        const values = (signer as { values?: unknown[] })?.values;
+        const keyData = values?.[1];
+        if (!keyData) continue;
+        const hex = Buffer.isBuffer(keyData)
+          ? keyData.toString('hex')
+          : keyData instanceof Uint8Array
+            ? Buffer.from(keyData).toString('hex')
+            : String(keyData);
+        if (hex.toLowerCase() === wanted) return rule.id;
+      }
+    }
+  } catch {
+    // Enumeração indisponível: usa o id previsto.
+  }
+
+  try {
+    const { result } = await kit.rules.get(fallbackId);
+    return result ? fallbackId : null;
   } catch {
     return null;
   }

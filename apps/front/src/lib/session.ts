@@ -26,7 +26,7 @@ import {
 import { CONFIG } from './config';
 import { endpoints } from './api';
 import { spendingLimitParams } from './policyParams';
-import { confirmContextRule, nextContextRuleId, signAndSubmit } from './submit';
+import { findRuleForSigner, nextContextRuleId, signAndSubmit } from './submit';
 import * as store from './sessionStore';
 
 export const LEDGERS_PER_DAY = LEDGERS_PER_HOUR * 24;
@@ -52,12 +52,22 @@ export interface SessionOptions {
   name?: string;
 }
 
+/**
+ * Monta o SelectedSigner de uma chave guardada.
+ *
+ * O campo `signer` é obrigatório na prática, embora o tipo o marque como
+ * opcional: o kit resolve quais context rules amarram o digest a partir de
+ * `selectedSigners.map(({ signer }) => signer)`. Sem ele a lista fica vazia, a
+ * regra `CallContract` não é encontrada e a assinatura cai na regra Default —
+ * ou seja, pede a passkey mesmo com o grant ativo.
+ */
 function signerFromSecret(secret: string, label: string): SelectedSigner {
   const keypair = Keypair.fromSecret(secret);
   return {
     type: 'ed25519',
     ed25519PublicKey: keypair.rawPublicKey().toString('hex'),
     label,
+    signer: createEd25519Signer(CONFIG.ed25519VerifierAddress, keypair.rawPublicKey()),
   };
 }
 
@@ -127,7 +137,12 @@ export async function grantSession(
     validUntil ?? undefined,
   );
   const result = await signAndSubmit(kit, tx);
-  const ruleId = await confirmContextRule(kit, expectedRuleId, name);
+  const ruleId = await findRuleForSigner(
+    kit,
+    keypair.rawPublicKey().toString('hex'),
+    expectedRuleId,
+    targetContract,
+  );
 
   if (ruleId !== null) {
     store.save(smartAccount, {
@@ -156,11 +171,7 @@ export async function grantSession(
     ruleId,
     publicKey: keypair.rawPublicKey().toString('hex'),
     validUntil,
-    signer: {
-      type: 'ed25519',
-      ed25519PublicKey: keypair.rawPublicKey().toString('hex'),
-      label: name,
-    },
+    signer: signerFromSecret(keypair.secret(), name),
   };
 }
 
