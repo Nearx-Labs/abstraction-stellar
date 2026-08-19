@@ -21,6 +21,7 @@ import {
 import { CONFIG } from './config';
 import { endpoints } from './api';
 import { spendingLimitParams } from './policyParams';
+import { confirmContextRule, nextContextRuleId, signAndSubmit } from './submit';
 
 export interface SessionGrant {
   ruleId: number | null;
@@ -43,13 +44,6 @@ export const liveSessionFor = (ruleId: number): SessionGrant | undefined =>
 
 export const hasLiveKey = (ruleId: number | null): boolean =>
   ruleId !== null && liveSessions.has(ruleId);
-
-function readRuleId(result: unknown): number | null {
-  const id = (result as { result?: { id?: number } })?.result?.id;
-  // O relayer pode devolver só o hash. Sem id, o registro nasce `pending` e o
-  // worker de sync o resolve — melhor do que gravar -1 e fingir que deu certo.
-  return typeof id === 'number' && Number.isInteger(id) && id >= 0 ? id : null;
-}
 
 /**
  * Cria e autoriza uma session key para `targetContract`, e registra o
@@ -82,6 +76,10 @@ export async function grantSession(
     [CONFIG.spendingLimitPolicyAddress, spendingLimitParams(limit, ttl)],
   ]);
 
+  // O id precisa ser lido ANTES: a resposta da submissão não traz o retorno do
+  // contrato, e o contador é monotônico — o próximo id é o valor atual.
+  const expectedRuleId = await nextContextRuleId(kit);
+
   const tx = await kit.rules.add(
     createCallContractContext(targetContract),
     name,
@@ -89,8 +87,8 @@ export async function grantSession(
     policies,
     validUntil,
   );
-  const result = await tx.signAndSend();
-  const ruleId = readRuleId(result);
+  const result = await signAndSubmit(kit, tx);
+  const ruleId = await confirmContextRule(kit, expectedRuleId, name);
 
   const grant: SessionGrant = {
     ruleId,
@@ -114,7 +112,7 @@ export async function grantSession(
     spendingLimitStroops: limit.toString(),
     periodLedgers: ttl,
     validUntilLedger: String(validUntil),
-    grantTxHash: (result as { hash?: string })?.hash,
+    grantTxHash: result.hash,
   });
 
   return grant;
@@ -138,7 +136,7 @@ export async function revokeSession(
   ruleId: number,
 ): Promise<void> {
   const tx = await kit.rules.remove(ruleId);
-  const result = await tx.signAndSend();
+  const result = await signAndSubmit(kit, tx);
   liveSessions.delete(ruleId);
-  await endpoints.revokeSession(smartAccount, ruleId, (result as { hash?: string })?.hash);
+  await endpoints.revokeSession(smartAccount, ruleId, result.hash);
 }

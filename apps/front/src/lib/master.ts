@@ -14,6 +14,7 @@ import {
 } from 'smart-account-kit';
 import { api } from './api';
 import { mintQuotaParams } from './policyParams';
+import { confirmContextRule, nextContextRuleId, signAndSubmit } from './submit';
 
 export interface MasterState {
   masterAccount: string | null;
@@ -74,18 +75,20 @@ export async function grantMintPermission(
     [state.policyContract, mintQuotaParams(maxItems, periodLedgers)],
   ]);
 
+  const name = 'mint do serviço';
+  const expectedRuleId = await nextContextRuleId(kit);
+
   const tx = await kit.rules.add(
     createCallContractContext(state.ledgerContract),
-    'mint do serviço',
+    name,
     [signer],
     policies,
   );
-  const result = await tx.signAndSend();
+  const result = await signAndSubmit(kit, tx);
 
-  const contextRuleId = (result as { result?: { id?: number } })?.result?.id;
   const grant: GrantResult = {
-    contextRuleId: typeof contextRuleId === 'number' ? contextRuleId : null,
-    txHash: (result as { hash?: string })?.hash,
+    contextRuleId: await confirmContextRule(kit, expectedRuleId, name),
+    txHash: result.hash,
   };
 
   await masterApi.recordGrant({
@@ -104,6 +107,6 @@ export async function revokeMintPermission(
   contextRuleId: number,
 ): Promise<void> {
   const tx = await kit.rules.remove(contextRuleId);
-  await tx.signAndSend();
+  await signAndSubmit(kit, tx);
   await masterApi.revokeGrant();
 }
