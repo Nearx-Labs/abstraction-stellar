@@ -6,6 +6,7 @@ import { Onboarding } from '@/pages/Onboarding';
 import { WalletPage } from '@/pages/Wallet';
 import { SessionsPage } from '@/pages/Sessions';
 import { MintPage } from '@/pages/Mint';
+import { MasterPage } from '@/pages/Master';
 import { useWallet } from '@/hooks/useWallet';
 
 function Protected({ render }: { render: (address: string) => JSX.Element }) {
@@ -35,6 +36,10 @@ export function App() {
         <Route
           path="/mint"
           element={<Protected render={(address) => <MintPage address={address} />} />}
+        />
+        <Route
+          path="/master"
+          element={<Protected render={(address) => <MasterPage address={address} />} />}
         />
         <Route
           path="/sessions"

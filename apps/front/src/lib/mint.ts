@@ -26,6 +26,10 @@ export interface MintInput {
   /** Identificador gerado fora da chain — a mesma chave que o banco guarda. */
   uuid: string;
   name: string;
+  /**
+   * URI da mídia. O contrato mantém o campo, mas estes itens não têm imagem —
+   * o front sempre manda vazio.
+   */
   uri: string;
   fields: CustomField[];
 }

@@ -3,19 +3,10 @@
 // É o caso de uso que fecha o circuito: o usuário preenche um formulário, a
 // passkey assina, o relayer paga a taxa, o contrato guarda os campos e o
 // registro aparece no ledger — sem seed phrase e sem XLM para a fee.
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import {
-  ArrowRightLeft,
-  ExternalLink,
-  Layers,
-  Plus,
-  RefreshCw,
-  Sparkles,
-  Trash2,
-  Upload,
-} from 'lucide-react';
+import { ArrowRightLeft, ExternalLink, Layers, Plus, RefreshCw, Sparkles, Trash2 } from 'lucide-react';
 import {
   Alert,
   Badge,
@@ -27,7 +18,7 @@ import {
   Modal,
   Skeleton,
 } from '@/components/ui';
-import { ApiError, api, uploadMedia } from '@/lib/api';
+import { api } from '@/lib/api';
 import { CONFIG, contractUrl, txUrl } from '@/lib/config';
 import { kit } from '@/lib/kit';
 import {
@@ -62,12 +53,10 @@ const SUGGESTIONS: CustomField[] = [
 export function MintPage({ address }: { address: string }) {
   const queryClient = useQueryClient();
 
-  const fileInput = useRef<HTMLInputElement>(null);
   const [uuid, setUuid] = useState(newUuid);
   const [transferTarget, setTransferTarget] = useState<LedgerRecord | null>(null);
   const [transferTo, setTransferTo] = useState('');
   const [name, setName] = useState('');
-  const [uri, setUri] = useState('');
   const [fields, setFields] = useState<CustomField[]>([
     { key: '', value: '' },
     { key: '', value: '' },
@@ -82,8 +71,8 @@ export function MintPage({ address }: { address: string }) {
     refetchInterval: 20_000,
   });
 
-  const input = { uuid, name, uri, fields: cleanFields(fields) };
-  const validationError = validateMint({ uuid, name, uri, fields });
+  const input = { uuid, name, uri: '', fields: cleanFields(fields) };
+  const validationError = validateMint({ uuid, name, uri: '', fields });
 
   const mint = useMutation({
     mutationFn: async () => {
@@ -101,7 +90,6 @@ export function MintPage({ address }: { address: string }) {
       });
       setUuid(newUuid());
       setName('');
-      setUri('');
       setFields([
         { key: '', value: '' },
         { key: '', value: '' },
@@ -110,23 +98,6 @@ export function MintPage({ address }: { address: string }) {
       void queryClient.invalidateQueries({ queryKey: ['usage', address] });
     },
     onError: (error: Error) => toast.error(error.message),
-  });
-
-  const upload = useMutation({
-    mutationFn: (file: File) => uploadMedia(file),
-    onSuccess: (result) => {
-      setUri(result.url);
-      toast.success('Arquivo enviado. A URL entrou no campo.');
-    },
-    onError: (error) => {
-      const copy: Record<string, string> = {
-        FILE_TOO_LARGE: 'O arquivo passa de 5MB.',
-        UNSUPPORTED_TYPE: 'Formato não aceito. Use PNG, JPG, WebP, GIF ou AVIF.',
-        RATE_LIMITED: 'Muitos envios. Aguarde um pouco.',
-      };
-      const code = error instanceof ApiError ? error.code : 'UNKNOWN';
-      toast.error(copy[code] ?? 'Não deu para enviar o arquivo.');
-    },
   });
 
   const transfer = useMutation({
@@ -207,55 +178,6 @@ export function MintPage({ address }: { address: string }) {
               placeholder="Ingresso VIP — Turnê 2026"
               onChange={(event) => setName(event.target.value)}
             />
-          </Field>
-
-          <Field
-            label="Mídia"
-            hint="O contrato guarda só a URI — arquivo on-chain custaria caro demais. Envie a imagem e ela vira uma URL, ou cole um link."
-          >
-            <div className="space-y-2">
-              <div className="flex gap-2">
-                <Input
-                  className="flex-1 text-xs"
-                  value={uri}
-                  maxLength={LIMITS.maxUriLen}
-                  placeholder="ipfs://Qm… ou https://…"
-                  onChange={(event) => setUri(event.target.value)}
-                  spellCheck={false}
-                />
-                <Button
-                  variant="outline"
-                  loading={upload.isPending}
-                  onClick={() => fileInput.current?.click()}
-                >
-                  {!upload.isPending && <Upload className="size-4" />}
-                  {upload.isPending ? 'Enviando…' : 'Enviar arquivo'}
-                </Button>
-              </div>
-
-              <input
-                ref={fileInput}
-                type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif,image/avif"
-                className="hidden"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) upload.mutate(file);
-                  event.target.value = '';
-                }}
-              />
-
-              {uri && /^https?:\/\//.test(uri) && (
-                <img
-                  src={uri}
-                  alt="Prévia da mídia"
-                  className="max-h-40 rounded-xl border border-border object-contain"
-                  onError={(event) => {
-                    event.currentTarget.style.display = 'none';
-                  }}
-                />
-              )}
-            </div>
           </Field>
 
           <div>
@@ -401,9 +323,6 @@ export function MintPage({ address }: { address: string }) {
                   </dl>
                 )}
 
-                {record.uri && (
-                  <p className="mt-1 truncate font-mono text-xs text-muted">{record.uri}</p>
-                )}
               </li>
             ))}
           </ul>

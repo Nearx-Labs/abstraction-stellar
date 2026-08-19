@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { ExternalLink, KeyRound, LogOut, Sparkles, Wallet } from 'lucide-react';
+import { ExternalLink, KeyRound, LogOut, ShieldCheck, Sparkles, Wallet } from 'lucide-react';
 import { cn, truncateAddress } from '@/lib/utils';
 import { contractUrl } from '@/lib/config';
 import { useWallet } from '@/hooks/useWallet';
@@ -8,6 +8,7 @@ import { useWallet } from '@/hooks/useWallet';
 const TABS = [
   { to: '/wallet', label: 'Carteira', icon: Wallet },
   { to: '/mint', label: 'Mint', icon: Sparkles },
+  { to: '/master', label: 'Conta mestre', icon: ShieldCheck },
   { to: '/sessions', label: 'Session keys', icon: KeyRound },
 ];
 

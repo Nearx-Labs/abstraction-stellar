@@ -21,7 +21,7 @@ import { authnRoutes } from './http/authn.js';
 import { faucetRoutes } from './http/faucet.js';
 import { sessionRoutes } from './http/sessions.js';
 import { ledgerRoutes } from './http/ledger.js';
-import { mediaRoutes } from './http/media.js';
+import { masterRoutes } from './http/master.js';
 import { startTreasuryOutboxWorker } from './workers/treasuryOutbox.js';
 import { startMaintenanceWorker } from './workers/maintenance.js';
 import { startSessionSyncWorker } from './workers/sessionSync.js';
@@ -35,8 +35,8 @@ app.route('/v1', authnRoutes);
 app.route('/v1', accountRoutes);
 app.route('/v1', faucetRoutes);
 app.route('/v1', sessionRoutes);
+app.route('/v1', masterRoutes);
 app.route('/v1', ledgerRoutes);
-app.route('/v1', mediaRoutes);
 app.route('/v1', emailRoutes);
 
 app.notFound((c) => c.json({ success: false, error: 'rota inexistente', errorCode: 'NOT_FOUND' }, 404));

@@ -87,6 +87,9 @@ jobs:
           cache: npm
           cache-dependency-path: apps/front/package-lock.json
       - run: npm ci
+      # Duas cópias do stellar-sdk fazem o Spec do kit rejeitar os ScVal que
+      # este app constrói, com um erro que não diz nada sobre versão.
+      - run: npm run check-sdk
       - run: npm run typecheck
       - run: npm run build
 

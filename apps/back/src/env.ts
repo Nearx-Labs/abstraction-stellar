@@ -51,6 +51,18 @@ const schema = z
     DEMO_LEDGER_CONTRACT_ID: z
       .string()
       .default('CCBGDWXPHXPGYJL2T4GDIF6PAGZ3XVYFR67HBFQ5RVJXGNMT5KGCUD5G'),
+    ED25519_VERIFIER_ADDRESS: z
+      .string()
+      .default('CCNJDEL774D5UIOEYXIJZRY3HVVR4FIKGGURY34TFCWPAC25QYNRUKMJ'),
+    /**
+     * Semente da chave Ed25519 que o serviço usa para assinar como conta
+     * mestre. A chave por app é derivada daqui — nada de segredo em repouso no
+     * banco. Trocar isto invalida os grants já concedidos on-chain.
+     */
+    MASTER_SIGNER_SEED: z.string().default('abstraction-dev-master-seed'),
+    MINT_QUOTA_POLICY_ADDRESS: z
+      .string()
+      .default('CCKCKDXEWD3LHSZT3OLTJTRFNMXPQPONKUPQPQJ2CAXFVNACJDFAYWVJ'),
     XLM_SAC_ADDRESS: z
       .string()
       .default('CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC'),
@@ -101,6 +113,15 @@ const schema = z
       ['ISSUER_SEED_HEX', v.ISSUER_SEED_HEX],
       ['RP_ORIGINS', v.RP_ORIGINS.length > 0 ? v.RP_ORIGINS : undefined],
     ];
+    if (v.MASTER_SIGNER_SEED === 'abstraction-dev-master-seed') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['MASTER_SIGNER_SEED'],
+        message:
+          'MASTER_SIGNER_SEED está no valor de desenvolvimento. Quem souber deste ' +
+          'valor assina como a conta mestre de qualquer tenant, até o teto concedido.',
+      });
+    }
     for (const [key, value] of required) {
       if (value === undefined) {
         ctx.addIssue({
