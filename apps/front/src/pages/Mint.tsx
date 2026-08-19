@@ -19,6 +19,7 @@ import {
   Skeleton,
 } from '@/components/ui';
 import { api } from '@/lib/api';
+import { ensureAppKey, existingSigner } from '@/lib/appKey';
 import { CONFIG, contractUrl, txUrl } from '@/lib/config';
 import { kit } from '@/lib/kit';
 import {
@@ -114,6 +115,22 @@ export function MintPage({ address }: { address: string }) {
   }
 
   const filledCount = cleanFields(fields).length;
+
+  // O grant deste contrato é um passo próprio: assim fica claro que a digital
+  // que aparece é da AUTORIZAÇÃO, não do registro, e uma recusa não parece
+  // "o mint falhou".
+  const [authorized, setAuthorized] = useState(
+    () => existingSigner(address, CONFIG.demoLedgerAddress) !== null,
+  );
+
+  const authorize = useMutation({
+    mutationFn: () => ensureAppKey(kit, address, CONFIG.demoLedgerAddress),
+    onSuccess: () => {
+      setAuthorized(true);
+      toast.success('Autorizado. Os próximos registros não pedem a digital.');
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
 
   return (
     <>
@@ -231,16 +248,34 @@ export function MintPage({ address }: { address: string }) {
             <Alert tone="danger">{validationError}</Alert>
           )}
 
-          <Button
-            full
-            size="lg"
-            loading={mint.isPending}
-            disabled={validationError !== null}
-            onClick={() => mint.mutate()}
-          >
-            {!mint.isPending && <Sparkles className="size-4" />}
-            {mint.isPending ? 'Assinando com a passkey…' : 'Registrar no ledger'}
-          </Button>
+          {!authorized ? (
+            <>
+              <Alert tone="primary">
+                Autorize este app a registrar itens por você. É uma digital só — depois disso os
+                registros saem sem pedir nada, dentro do teto da permissão.
+              </Alert>
+              <Button
+                full
+                size="lg"
+                loading={authorize.isPending}
+                onClick={() => authorize.mutate()}
+              >
+                {!authorize.isPending && <Sparkles className="size-4" />}
+                {authorize.isPending ? 'Aguardando sua digital…' : 'Autorizar registro no ledger'}
+              </Button>
+            </>
+          ) : (
+            <Button
+              full
+              size="lg"
+              loading={mint.isPending}
+              disabled={validationError !== null}
+              onClick={() => mint.mutate()}
+            >
+              {!mint.isPending && <Sparkles className="size-4" />}
+              {mint.isPending ? 'Registrando…' : 'Registrar no ledger'}
+            </Button>
+          )}
         </div>
       </Card>
 

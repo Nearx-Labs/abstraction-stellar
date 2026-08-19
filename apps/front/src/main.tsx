@@ -5,6 +5,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { App } from './App';
 import { WalletProvider } from './hooks/useWallet';
 import './index.css';
+import { traceWebAuthn } from './lib/webauthnTrace';
+
+// Em desenvolvimento, registra no console quem dispara uma cerimônia WebAuthn.
+traceWebAuthn();
 
 const queryClient = new QueryClient({
   defaultOptions: {
