@@ -11,7 +11,8 @@
     "bootstrap": "tsx scripts/bootstrap.ts",
     "fixture": "tsx src/email/fixture.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "openapi:export": "tsx scripts/export-openapi.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.0",

@@ -20,8 +20,8 @@ const RELAY_LIMIT_PER_MINUTE = 30;
 
 export const relayRoutes = new Hono();
 
-relayRoutes.post('/relay/:pk', async (c) => {
-  const pk = c.req.param('pk');
+relayRoutes.post('/relay/:publishableKey', async (c) => {
+  const pk = c.req.param('publishableKey');
 
   const resolved = await resolveByKey(pk, 'publishable');
   if (!resolved) {

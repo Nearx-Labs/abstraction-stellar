@@ -92,7 +92,27 @@ qualquer grant de dApp faz.
 
 ## A API
 
-Base `/v1`. Erros sempre `{success, error, errorCode}`.
+Base `/v1`. Erros sempre `{success, error, errorCode}` — o `errorCode` é o
+contrato estável; a mensagem é para humano.
+
+A especificação OpenAPI 3.1 é servida pelo próprio serviço, então o que se lê é
+o que o processo está rodando:
+
+| | |
+|---|---|
+| `GET /openapi.json` | a spec |
+| `GET /docs` | referência navegável |
+| [`apps/back/openapi.json`](apps/back/openapi.json) | a mesma spec versionada, para gerar cliente |
+
+```bash
+cd apps/back && npm run openapi:export
+```
+
+A spec é escrita à mão — o Hono não tem decorators. O que impede o
+apodrecimento é [`test/openapi.test.ts`](apps/back/test/openapi.test.ts), que
+compara o documento com as rotas **realmente registradas** (`app.routes`): rota
+nova sem documentação, ou documentação de rota que não existe mais, quebra o
+CI. O documento também é validado por linter no CI.
 
 ### Relay — o endpoint que o kit chama
 

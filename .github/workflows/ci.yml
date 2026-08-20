@@ -50,6 +50,12 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      # A spec é escrita à mão; o teste acima já garante que ela cobre as rotas
+      # registradas, e este passo confere que o documento é OpenAPI válido.
+      - run: npm run openapi:export
+      - run: npx --yes @redocly/cli@latest lint openapi.json
+      - name: openapi.json commitado está em dia
+        run: git diff --exit-code openapi.json
 
   fixture:
     name: vetor de attestation não pode divergir
