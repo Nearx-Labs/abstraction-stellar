@@ -1,0 +1,37 @@
+{
+  "name": "@abstraction/client",
+  "version": "0.1.0",
+  "description": "Cliente tipado da Abstraction API — smart accounts na Stellar com taxas patrocinadas.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "generate": "openapi-typescript ../../apps/back/openapi.json -o src/schema.d.ts",
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "openapi-typescript": "^7.5.0",
+    "tsup": "^8.3.5",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.8"
+  }
+}

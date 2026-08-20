@@ -102,6 +102,29 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
 
+  client:
+    name: client tipado
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/client/package-lock.json
+      - run: npm ci
+      # Os tipos são gerados da spec: regenerar aqui e exigir diff vazio é o que
+      # garante que o cliente publicado corresponde à API.
+      - run: npm run generate
+      - name: schema.d.ts está em dia com o openapi.json
+        run: git diff --exit-code src/schema.d.ts
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
   images:
     name: imagens docker
     runs-on: ubuntu-latest

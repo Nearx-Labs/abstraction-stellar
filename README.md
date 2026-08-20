@@ -28,6 +28,8 @@ docker compose up --build
 apps/
   front/            web app (Vite + React + Tailwind)
   back/             API única (Hono + Postgres)
+packages/
+  client/           cliente tipado, gerado da spec OpenAPI
 contracts/
   meta-account/                # a smart account (CustomAccountInterface + SmartAccount)
   webauthn-verifier/           # verificador de assertions WebAuthn (passkey)
@@ -106,6 +108,17 @@ o que o processo está rodando:
 
 ```bash
 cd apps/back && npm run openapi:export
+```
+
+Para consumir de outro serviço TypeScript há um cliente pronto em
+[`packages/client`](packages/client) — tipos gerados da spec, ESM e CommonJS,
+sem dependência de runtime:
+
+```ts
+const abstraction = new AbstractionClient({ baseUrl, secretKey });
+
+const { account } = await abstraction.accounts.byExternalId('user-42');
+const { minted, failed } = await abstraction.mintAll({ uuids, name, fields });
 ```
 
 A spec é escrita à mão — o Hono não tem decorators. O que impede o

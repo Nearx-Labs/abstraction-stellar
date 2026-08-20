@@ -105,7 +105,14 @@
         "security": [],
         "responses": {
           "200": {
-            "description": "Pronto para servir tráfego."
+            "description": "Pronto para servir tráfego.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
+              }
+            }
           },
           "503": {
             "description": "Banco ou RPC indisponível."
@@ -414,7 +421,14 @@
         },
         "responses": {
           "200": {
-            "description": "Sessão aberta; o cookie vem no `Set-Cookie`."
+            "description": "Sessão aberta; o cookie vem no `Set-Cookie`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthnVerified"
+                }
+              }
+            }
           },
           "400": {
             "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
@@ -453,7 +467,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Encerrada."
+            "description": "Encerrada.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ok"
+                }
+              }
+            }
           }
         }
       }
@@ -513,7 +534,14 @@
         },
         "responses": {
           "200": {
-            "description": "Registrada."
+            "description": "Registrada.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisteredAccount"
+                }
+              }
+            }
           },
           "400": {
             "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
@@ -580,7 +608,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Encontrada."
+            "description": "Encontrada.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisteredAccount"
+                }
+              }
+            }
           },
           "400": {
             "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
@@ -786,7 +821,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Página do histórico."
+            "description": "Página do histórico.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SponsorshipPage"
+                }
+              }
+            }
           },
           "401": {
             "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
@@ -840,7 +882,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Disponibilidade e último claim."
+            "description": "Disponibilidade e último claim.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FaucetStatus"
+                }
+              }
+            }
           },
           "401": {
             "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
@@ -893,7 +942,14 @@
         ],
         "responses": {
           "200": {
-            "description": "XLM enviado; a cota conclui em segundos."
+            "description": "XLM enviado; a cota conclui em segundos.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FaucetClaim"
+                }
+              }
+            }
           },
           "401": {
             "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
@@ -988,7 +1044,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Enfileirada."
+            "description": "Enfileirada.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Queued"
+                }
+              }
+            }
           },
           "401": {
             "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
@@ -1181,7 +1244,14 @@
         },
         "responses": {
           "200": {
-            "description": "Registrado."
+            "description": "Registrado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedGrant"
+                }
+              }
+            }
           },
           "400": {
             "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
@@ -1261,7 +1331,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Revogado."
+            "description": "Revogado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ok"
+                }
+              }
+            }
           },
           "401": {
             "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
@@ -1360,7 +1437,14 @@
         },
         "responses": {
           "200": {
-            "description": "Definida."
+            "description": "Definida.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MasterAccountSet"
+                }
+              }
+            }
           },
           "400": {
             "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
@@ -1445,7 +1529,14 @@
         },
         "responses": {
           "200": {
-            "description": "Registrada."
+            "description": "Registrada.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedGrant"
+                }
+              }
+            }
           },
           "400": {
             "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
@@ -1495,7 +1586,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Revogada."
+            "description": "Revogada.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ok"
+                }
+              }
+            }
           },
           "401": {
             "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
@@ -1565,7 +1663,14 @@
         },
         "responses": {
           "200": {
-            "description": "Lote mintado."
+            "description": "Lote mintado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MintResult"
+                }
+              }
+            }
           },
           "400": {
             "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
@@ -1660,7 +1765,14 @@
         },
         "responses": {
           "200": {
-            "description": "Posse transferida."
+            "description": "Posse transferida.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferResult"
+                }
+              }
+            }
           },
           "400": {
             "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
@@ -1870,7 +1982,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Eventos."
+            "description": "Eventos.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LedgerEntryPage"
+                }
+              }
+            }
           },
           "401": {
             "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
@@ -1907,7 +2026,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Itens da conta."
+            "description": "Itens da conta.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LedgerPage"
+                }
+              }
+            }
           },
           "409": {
             "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
@@ -1933,7 +2059,14 @@
         "security": [],
         "responses": {
           "200": {
-            "description": "Chave pública em hex."
+            "description": "Chave pública em hex.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailIssuer"
+                }
+              }
+            }
           }
         }
       }
@@ -1967,7 +2100,14 @@
         },
         "responses": {
           "200": {
-            "description": "Enviado."
+            "description": "Enviado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            }
           },
           "400": {
             "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
@@ -2024,7 +2164,14 @@
         },
         "responses": {
           "200": {
-            "description": "Token, subjectHash e keyData para registrar o signer."
+            "description": "Token, subjectHash e keyData para registrar o signer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailSession"
+                }
+              }
+            }
           },
           "400": {
             "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
@@ -2093,7 +2240,14 @@
         },
         "responses": {
           "200": {
-            "description": "sigDataXdr e expiração."
+            "description": "sigDataXdr e expiração.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailAttestation"
+                }
+              }
+            }
           },
           "400": {
             "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
@@ -2154,6 +2308,462 @@
       }
     },
     "schemas": {
+      "Ok": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": true
+          }
+        }
+      },
+      "Accepted": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          }
+        }
+      },
+      "Queued": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "queued": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Readiness": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "checks": {
+            "type": "object",
+            "properties": {
+              "db": {},
+              "rpc": {},
+              "outboxDead": {
+                "description": "Jobs que esgotaram as tentativas. Alerta, não indisponibilidade."
+              }
+            }
+          }
+        }
+      },
+      "AuthnVerified": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "contractId": {
+            "type": "string"
+          }
+        }
+      },
+      "AccountSummary": {
+        "type": "object",
+        "properties": {
+          "contractId": {
+            "type": "string"
+          },
+          "externalId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "deployed",
+              "failed"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RegisteredAccount": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "account": {
+            "$ref": "#/components/schemas/AccountSummary"
+          }
+        }
+      },
+      "MasterAccountSet": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "masterAccount": {
+            "type": "string"
+          },
+          "signer": {
+            "type": "object",
+            "properties": {
+              "publicKeyHex": {
+                "type": "string"
+              },
+              "verifier": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "CreatedGrant": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "state": {
+            "type": "string"
+          }
+        }
+      },
+      "Sponsorship": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "invoke",
+              "feebump"
+            ]
+          },
+          "isDeploy": {
+            "type": "boolean"
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "reserved",
+              "submitted",
+              "succeeded",
+              "failed",
+              "released"
+            ]
+          },
+          "txHash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "txStatus": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "chargedStroops": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "O que a rede cobrou."
+          },
+          "errorCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "SponsorshipPage": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Sponsorship"
+            }
+          }
+        }
+      },
+      "FaucetStatus": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "amountStroops": {
+            "type": "string"
+          },
+          "cooldownHours": {
+            "type": "integer"
+          },
+          "blocked": {
+            "type": "boolean"
+          },
+          "nextAvailableAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "xlm_sent",
+                  "allowance_set",
+                  "done",
+                  "failed"
+                ]
+              },
+              "xlmTxHash": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "FaucetClaim": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "claimId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "state": {
+            "type": "string"
+          },
+          "amountStroops": {
+            "type": "string"
+          },
+          "xlmTxHash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "allowancePending": {
+            "type": "boolean",
+            "description": "A cota fecha em segundos, pelo outbox."
+          },
+          "nextAvailableAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "MintResult": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "minted": {
+            "type": "integer"
+          },
+          "uuids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "hash": {
+            "type": "string"
+          }
+        }
+      },
+      "TransferResult": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "uuid": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "hash": {
+            "type": "string"
+          }
+        }
+      },
+      "LedgerPage": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "contractId": {
+            "type": "string"
+          },
+          "total": {
+            "type": "integer"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LedgerRecord"
+            }
+          }
+        }
+      },
+      "LedgerEntry": {
+        "type": "object",
+        "description": "Evento de negócio: on-chain vai o indispensável, o payload fica aqui.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "uuid": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "mint",
+              "transfer"
+            ]
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "payload": {
+            "type": "object"
+          },
+          "payloadHash": {
+            "type": "string",
+            "description": "sha256 do payload, truncado — commita o conteúdo."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "confirmed",
+              "failed"
+            ]
+          },
+          "txHash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "LedgerEntryPage": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LedgerEntry"
+            }
+          }
+        }
+      },
+      "EmailIssuer": {
+        "type": "object",
+        "properties": {
+          "issuerPublicKey": {
+            "type": "string"
+          }
+        }
+      },
+      "EmailSession": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string"
+          },
+          "subjectHash": {
+            "type": "string"
+          },
+          "keyData": {
+            "type": "string",
+            "description": "issuer pubkey (32B) || subject hash (32B), em hex."
+          }
+        }
+      },
+      "EmailAttestation": {
+        "type": "object",
+        "properties": {
+          "sigDataXdr": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        }
+      },
       "Error": {
         "type": "object",
         "properties": {

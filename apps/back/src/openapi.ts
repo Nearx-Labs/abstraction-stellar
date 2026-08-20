@@ -107,7 +107,7 @@ export const openapi = {
         description: 'Confere banco e RPC. Job morto no outbox é reportado, mas não derruba.',
         security: [],
         responses: {
-          200: { description: 'Pronto para servir tráfego.' },
+          200: { description: 'Pronto para servir tráfego.', content: { 'application/json': { schema: { $ref: '#/components/schemas/Readiness' } } } },
           503: { description: 'Banco ou RPC indisponível.' },
         },
       },
@@ -279,7 +279,7 @@ export const openapi = {
           },
         },
         responses: {
-          200: { description: 'Sessão aberta; o cookie vem no `Set-Cookie`.' },
+          200: { description: 'Sessão aberta; o cookie vem no `Set-Cookie`.', content: { 'application/json': { schema: { $ref: '#/components/schemas/AuthnVerified' } } } },
           400: ERROR_RESPONSE,
           401: ERROR_RESPONSE,
         },
@@ -291,7 +291,7 @@ export const openapi = {
         tags: ['authn'],
         summary: 'Encerra a sessão do painel',
         security: [{ sessionCookie: [] }],
-        responses: { 200: { description: 'Encerrada.' } },
+        responses: { 200: { description: 'Encerrada.', content: { 'application/json': { schema: { $ref: '#/components/schemas/Ok' } } } } },
       },
     },
 
@@ -333,7 +333,7 @@ export const openapi = {
           },
         },
         responses: {
-          200: { description: 'Registrada.' },
+          200: { description: 'Registrada.', content: { 'application/json': { schema: { $ref: '#/components/schemas/RegisteredAccount' } } } },
           400: ERROR_RESPONSE,
           401: ERROR_RESPONSE,
           409: { ...ERROR_RESPONSE, description: '`ACCOUNT_NOT_DEPLOYED`: a conta ainda não existe on-chain.' },
@@ -349,7 +349,7 @@ export const openapi = {
           { name: 'externalId', in: 'query', required: true, schema: { type: 'string' } },
         ],
         responses: {
-          200: { description: 'Encontrada.' },
+          200: { description: 'Encontrada.', content: { 'application/json': { schema: { $ref: '#/components/schemas/RegisteredAccount' } } } },
           400: ERROR_RESPONSE,
           401: ERROR_RESPONSE,
           404: ERROR_RESPONSE,
@@ -412,7 +412,11 @@ export const openapi = {
           { name: 'limit', in: 'query', schema: { type: 'integer', default: 25, maximum: 100 } },
           { name: 'offset', in: 'query', schema: { type: 'integer', default: 0 } },
         ],
-        responses: { 200: { description: 'Página do histórico.' }, 401: ERROR_RESPONSE, 404: ERROR_RESPONSE },
+        responses: {
+          200: { description: 'Página do histórico.', content: { 'application/json': { schema: { $ref: '#/components/schemas/SponsorshipPage' } } } },
+          401: ERROR_RESPONSE,
+          404: ERROR_RESPONSE,
+        },
       },
     },
 
@@ -424,7 +428,11 @@ export const openapi = {
         summary: 'Estado do faucet e cooldown',
         security: PANEL_OR_SERVICE,
         parameters: [ADDRESS_PARAM],
-        responses: { 200: { description: 'Disponibilidade e último claim.' }, 401: ERROR_RESPONSE, 404: ERROR_RESPONSE },
+        responses: {
+          200: { description: 'Disponibilidade e último claim.', content: { 'application/json': { schema: { $ref: '#/components/schemas/FaucetStatus' } } } },
+          401: ERROR_RESPONSE,
+          404: ERROR_RESPONSE,
+        },
       },
       post: {
         operationId: 'claimFaucet',
@@ -443,7 +451,7 @@ export const openapi = {
         security: PANEL_OR_SERVICE,
         parameters: [ADDRESS_PARAM],
         responses: {
-          200: { description: 'XLM enviado; a cota conclui em segundos.' },
+          200: { description: 'XLM enviado; a cota conclui em segundos.', content: { 'application/json': { schema: { $ref: '#/components/schemas/FaucetClaim' } } } },
           401: ERROR_RESPONSE,
           404: ERROR_RESPONSE,
           409: { ...ERROR_RESPONSE, description: '`ACCOUNT_NOT_DEPLOYED` ou `FAUCET_IN_FLIGHT`.' },
@@ -461,7 +469,12 @@ export const openapi = {
         description: 'Para o caso em que o XLM chegou mas a allowance não fechou.',
         security: PANEL_OR_SERVICE,
         parameters: [ADDRESS_PARAM],
-        responses: { 200: { description: 'Enfileirada.' }, 401: ERROR_RESPONSE, 404: ERROR_RESPONSE, 409: ERROR_RESPONSE },
+        responses: {
+          200: { description: 'Enfileirada.', content: { 'application/json': { schema: { $ref: '#/components/schemas/Queued' } } } },
+          401: ERROR_RESPONSE,
+          404: ERROR_RESPONSE,
+          409: ERROR_RESPONSE,
+        },
       },
     },
 
@@ -524,7 +537,12 @@ export const openapi = {
             },
           },
         },
-        responses: { 200: { description: 'Registrado.' }, 400: ERROR_RESPONSE, 401: ERROR_RESPONSE, 404: ERROR_RESPONSE },
+        responses: {
+          200: { description: 'Registrado.', content: { 'application/json': { schema: { $ref: '#/components/schemas/CreatedGrant' } } } },
+          400: ERROR_RESPONSE,
+          401: ERROR_RESPONSE,
+          404: ERROR_RESPONSE,
+        },
       },
     },
     '/v1/accounts/{address}/sessions/{ruleId}': {
@@ -539,7 +557,11 @@ export const openapi = {
           { name: 'ruleId', in: 'path', required: true, schema: { type: 'integer' } },
           { name: 'txHash', in: 'query', schema: { type: 'string' } },
         ],
-        responses: { 200: { description: 'Revogado.' }, 401: ERROR_RESPONSE, 404: ERROR_RESPONSE },
+        responses: {
+          200: { description: 'Revogado.', content: { 'application/json': { schema: { $ref: '#/components/schemas/Ok' } } } },
+          401: ERROR_RESPONSE,
+          404: ERROR_RESPONSE,
+        },
       },
     },
 
@@ -576,7 +598,12 @@ export const openapi = {
             },
           },
         },
-        responses: { 200: { description: 'Definida.' }, 400: ERROR_RESPONSE, 401: ERROR_RESPONSE, 404: ERROR_RESPONSE },
+        responses: {
+          200: { description: 'Definida.', content: { 'application/json': { schema: { $ref: '#/components/schemas/MasterAccountSet' } } } },
+          400: ERROR_RESPONSE,
+          401: ERROR_RESPONSE,
+          404: ERROR_RESPONSE,
+        },
       },
     },
     '/v1/master/grant': {
@@ -605,14 +632,19 @@ export const openapi = {
             },
           },
         },
-        responses: { 200: { description: 'Registrada.' }, 400: ERROR_RESPONSE, 401: ERROR_RESPONSE, 409: ERROR_RESPONSE },
+        responses: {
+          200: { description: 'Registrada.', content: { 'application/json': { schema: { $ref: '#/components/schemas/CreatedGrant' } } } },
+          400: ERROR_RESPONSE,
+          401: ERROR_RESPONSE,
+          409: ERROR_RESPONSE,
+        },
       },
       delete: {
         operationId: 'revokeMasterGrant',
         tags: ['master'],
         summary: 'Revoga a permissão do serviço',
         security: PANEL_OR_SERVICE,
-        responses: { 200: { description: 'Revogada.' }, 401: ERROR_RESPONSE },
+        responses: { 200: { description: 'Revogada.', content: { 'application/json': { schema: { $ref: '#/components/schemas/Ok' } } } }, 401: ERROR_RESPONSE },
       },
     },
 
@@ -662,7 +694,7 @@ export const openapi = {
           },
         },
         responses: {
-          200: { description: 'Lote mintado.' },
+          200: { description: 'Lote mintado.', content: { 'application/json': { schema: { $ref: '#/components/schemas/MintResult' } } } },
           400: ERROR_RESPONSE,
           401: ERROR_RESPONSE,
           403: { ...ERROR_RESPONSE, description: '`QUOTA_EXCEEDED`: a cota concedida acabou.' },
@@ -694,7 +726,7 @@ export const openapi = {
           },
         },
         responses: {
-          200: { description: 'Posse transferida.' },
+          200: { description: 'Posse transferida.', content: { 'application/json': { schema: { $ref: '#/components/schemas/TransferResult' } } } },
           400: ERROR_RESPONSE,
           401: ERROR_RESPONSE,
           409: {
@@ -775,7 +807,10 @@ export const openapi = {
           { name: 'limit', in: 'query', schema: { type: 'integer', default: 25, maximum: 100 } },
           { name: 'offset', in: 'query', schema: { type: 'integer', default: 0 } },
         ],
-        responses: { 200: { description: 'Eventos.' }, 401: ERROR_RESPONSE },
+        responses: {
+          200: { description: 'Eventos.', content: { 'application/json': { schema: { $ref: '#/components/schemas/LedgerEntryPage' } } } },
+          401: ERROR_RESPONSE,
+        },
       },
     },
     '/v1/accounts/{address}/ledger': {
@@ -785,7 +820,10 @@ export const openapi = {
         summary: 'Itens em posse de uma conta',
         security: [],
         parameters: [ADDRESS_PARAM],
-        responses: { 200: { description: 'Itens da conta.' }, 409: ERROR_RESPONSE },
+        responses: {
+          200: { description: 'Itens da conta.', content: { 'application/json': { schema: { $ref: '#/components/schemas/LedgerPage' } } } },
+          409: ERROR_RESPONSE,
+        },
       },
     },
 
@@ -797,7 +835,7 @@ export const openapi = {
         summary: 'Chave pública do emissor',
         description: 'É o que o `email-attestation-verifier` confere on-chain.',
         security: [],
-        responses: { 200: { description: 'Chave pública em hex.' } },
+        responses: { 200: { description: 'Chave pública em hex.', content: { 'application/json': { schema: { $ref: '#/components/schemas/EmailIssuer' } } } } },
       },
     },
     '/v1/email/request': {
@@ -814,7 +852,11 @@ export const openapi = {
             },
           },
         },
-        responses: { 200: { description: 'Enviado.' }, 400: ERROR_RESPONSE, 429: ERROR_RESPONSE },
+        responses: {
+          200: { description: 'Enviado.', content: { 'application/json': { schema: { $ref: '#/components/schemas/Accepted' } } } },
+          400: ERROR_RESPONSE,
+          429: ERROR_RESPONSE,
+        },
       },
     },
     '/v1/email/verify': {
@@ -836,7 +878,7 @@ export const openapi = {
           },
         },
         responses: {
-          200: { description: 'Token, subjectHash e keyData para registrar o signer.' },
+          200: { description: 'Token, subjectHash e keyData para registrar o signer.', content: { 'application/json': { schema: { $ref: '#/components/schemas/EmailSession' } } } },
           400: ERROR_RESPONSE,
           401: ERROR_RESPONSE,
           429: ERROR_RESPONSE,
@@ -869,7 +911,7 @@ export const openapi = {
           },
         },
         responses: {
-          200: { description: 'sigDataXdr e expiração.' },
+          200: { description: 'sigDataXdr e expiração.', content: { 'application/json': { schema: { $ref: '#/components/schemas/EmailAttestation' } } } },
           400: ERROR_RESPONSE,
           401: ERROR_RESPONSE,
           409: { ...ERROR_RESPONSE, description: '`ALREADY_ISSUED`: challenge já assinado.' },
@@ -894,6 +936,192 @@ export const openapi = {
       },
     },
     schemas: {
+      Ok: {
+        type: 'object',
+        properties: { success: { type: 'boolean', const: true } },
+      },
+      Accepted: {
+        type: 'object',
+        properties: { ok: { type: 'boolean', const: true } },
+      },
+      Queued: {
+        type: 'object',
+        properties: { success: { type: 'boolean' }, queued: { type: 'boolean' } },
+      },
+      Readiness: {
+        type: 'object',
+        properties: {
+          ok: { type: 'boolean' },
+          checks: {
+            type: 'object',
+            properties: {
+              db: {},
+              rpc: {},
+              outboxDead: { description: 'Jobs que esgotaram as tentativas. Alerta, não indisponibilidade.' },
+            },
+          },
+        },
+      },
+      AuthnVerified: {
+        type: 'object',
+        properties: { success: { type: 'boolean' }, contractId: { type: 'string' } },
+      },
+      AccountSummary: {
+        type: 'object',
+        properties: {
+          contractId: { type: 'string' },
+          externalId: { type: ['string', 'null'] },
+          status: { type: 'string', enum: ['pending', 'deployed', 'failed'] },
+          createdAt: { type: 'string', format: 'date-time' },
+        },
+      },
+      RegisteredAccount: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean' },
+          account: { $ref: '#/components/schemas/AccountSummary' },
+        },
+      },
+      MasterAccountSet: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean' },
+          masterAccount: { type: 'string' },
+          signer: {
+            type: 'object',
+            properties: { publicKeyHex: { type: 'string' }, verifier: { type: 'string' } },
+          },
+        },
+      },
+      CreatedGrant: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean' },
+          id: { type: 'string', format: 'uuid' },
+          state: { type: 'string' },
+        },
+      },
+      Sponsorship: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+          createdAt: { type: 'string', format: 'date-time' },
+          mode: { type: 'string', enum: ['invoke', 'feebump'] },
+          isDeploy: { type: 'boolean' },
+          targets: { type: 'array', items: { type: 'string' } },
+          state: { type: 'string', enum: ['reserved', 'submitted', 'succeeded', 'failed', 'released'] },
+          txHash: { type: ['string', 'null'] },
+          txStatus: { type: ['string', 'null'] },
+          chargedStroops: { type: ['string', 'null'], description: 'O que a rede cobrou.' },
+          errorCode: { type: ['string', 'null'] },
+        },
+      },
+      SponsorshipPage: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean' },
+          items: { type: 'array', items: { $ref: '#/components/schemas/Sponsorship' } },
+        },
+      },
+      FaucetStatus: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean' },
+          amountStroops: { type: 'string' },
+          cooldownHours: { type: 'integer' },
+          blocked: { type: 'boolean' },
+          nextAvailableAt: { type: ['string', 'null'], format: 'date-time' },
+          last: {
+            type: ['object', 'null'],
+            properties: {
+              state: { type: 'string', enum: ['pending', 'xlm_sent', 'allowance_set', 'done', 'failed'] },
+              xlmTxHash: { type: ['string', 'null'] },
+              createdAt: { type: 'string', format: 'date-time' },
+              error: { type: ['string', 'null'] },
+            },
+          },
+        },
+      },
+      FaucetClaim: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean' },
+          claimId: { type: 'string', format: 'uuid' },
+          state: { type: 'string' },
+          amountStroops: { type: 'string' },
+          xlmTxHash: { type: ['string', 'null'] },
+          allowancePending: { type: 'boolean', description: 'A cota fecha em segundos, pelo outbox.' },
+          nextAvailableAt: { type: 'string', format: 'date-time' },
+        },
+      },
+      MintResult: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean' },
+          minted: { type: 'integer' },
+          uuids: { type: 'array', items: { type: 'string' } },
+          hash: { type: 'string' },
+        },
+      },
+      TransferResult: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean' },
+          uuid: { type: 'string' },
+          to: { type: 'string' },
+          hash: { type: 'string' },
+        },
+      },
+      LedgerPage: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean' },
+          contractId: { type: 'string' },
+          total: { type: 'integer' },
+          items: { type: 'array', items: { $ref: '#/components/schemas/LedgerRecord' } },
+        },
+      },
+      LedgerEntry: {
+        type: 'object',
+        description: 'Evento de negócio: on-chain vai o indispensável, o payload fica aqui.',
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+          uuid: { type: 'string' },
+          kind: { type: 'string', enum: ['mint', 'transfer'] },
+          owner: { type: ['string', 'null'] },
+          payload: { type: 'object' },
+          payloadHash: { type: 'string', description: 'sha256 do payload, truncado — commita o conteúdo.' },
+          state: { type: 'string', enum: ['pending', 'confirmed', 'failed'] },
+          txHash: { type: ['string', 'null'] },
+          createdAt: { type: 'string', format: 'date-time' },
+        },
+      },
+      LedgerEntryPage: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean' },
+          items: { type: 'array', items: { $ref: '#/components/schemas/LedgerEntry' } },
+        },
+      },
+      EmailIssuer: {
+        type: 'object',
+        properties: { issuerPublicKey: { type: 'string' } },
+      },
+      EmailSession: {
+        type: 'object',
+        properties: {
+          token: { type: 'string' },
+          subjectHash: { type: 'string' },
+          keyData: { type: 'string', description: 'issuer pubkey (32B) || subject hash (32B), em hex.' },
+        },
+      },
+      EmailAttestation: {
+        type: 'object',
+        properties: {
+          sigDataXdr: { type: 'string' },
+          expiresAt: { type: 'string' },
+        },
+      },
       Error: {
         type: 'object',
         properties: {
