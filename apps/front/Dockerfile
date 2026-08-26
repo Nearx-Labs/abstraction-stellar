@@ -10,8 +10,16 @@ RUN apk upgrade --no-cache
 COPY package.json package-lock.json* ./
 RUN npm ci
 
-ARG VITE_API_URL=http://localhost:8080
-ARG VITE_PUBLISHABLE_KEY=pk_test_dev
+# Os defaults são os do ambiente publicado, e não os de desenvolvimento, porque
+# o CI constrói a imagem SEM passar build-arg: o que estiver aqui é o que vai
+# para o bundle. Com `localhost:8080` e `pk_test_dev` o front publicado subia,
+# respondia 200 e não conseguia falar com API nenhuma.
+#
+# Rodando local, `npm run dev` lê os VITE_* do .env e não passa por aqui.
+ARG VITE_API_URL=https://api.abstraction.nearx.com.br
+# Pública por construção: viaja no path do relayerUrl, porque o RelayerClient do
+# kit não manda header além de Content-Type e X-Client-*.
+ARG VITE_PUBLISHABLE_KEY=pk_homolog_eddae804d009246c7c296a2cadfa4deb
 ARG VITE_RPC_URL
 ARG VITE_NETWORK_PASSPHRASE
 ARG VITE_TREASURY
