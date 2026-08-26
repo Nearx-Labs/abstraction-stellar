@@ -133,18 +133,67 @@ jobs:
     name: imagens docker
     runs-on: ubuntu-latest
     needs: [back, front]
+    # `packages: write` é o que autoriza o push no GHCR; `contents: read` volta a
+    # ser explícito porque declarar o bloco zera os defaults do repositório.
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
+
+      # Em pull request o push fica desligado: o token de um PR vindo de fork não
+      # tem `packages: write`, e mesmo com permissão publicar imagem de código
+      # ainda não revisado é o tipo de coisa que ninguém quer descobrir depois.
+      # O GHCR só aceita nome de imagem em minúsculas, e a org é "Nearx-Labs".
+      # Deixar explícito em vez de confiar na normalização do metadata-action:
+      # o erro seria um push recusado no fim de um build de 2 minutos.
+      - name: nome da imagem em minúsculas
+        id: repo
+        run: echo "lc=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: login no GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # `type=sha` dá uma tag imutável por commit — é o que se referencia num
+      # rollback. `latest` sozinho não diz qual código está rodando.
+      - name: tags do back
+        id: meta_back
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ steps.repo.outputs.lc }}/back
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=long
+
       - uses: docker/build-push-action@v6
         with:
           context: apps/back
-          push: false
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta_back.outputs.tags }}
+          labels: ${{ steps.meta_back.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: tags do front
+        id: meta_front
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ steps.repo.outputs.lc }}/front
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=long
+
       - uses: docker/build-push-action@v6
         with:
           context: apps/front
-          push: false
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta_front.outputs.tags }}
+          labels: ${{ steps.meta_front.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
