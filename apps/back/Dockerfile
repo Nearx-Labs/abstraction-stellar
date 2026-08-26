@@ -19,7 +19,11 @@ RUN npm run build && npm prune --omit=dev
 FROM node:22-alpine AS runner
 
 WORKDIR /app
-ENV NODE_ENV=production
+# Commit que gerou a imagem. Sem isto, "qual build está no ar?" só se responde
+# pedindo o log do container para quem tem acesso ao cluster.
+ARG GIT_SHA=desconhecido
+ENV NODE_ENV=production \
+    GIT_SHA=$GIT_SHA
 RUN apk upgrade --no-cache
 
 RUN addgroup -S -g 1001 nodejs && adduser -S -u 1001 back -G nodejs

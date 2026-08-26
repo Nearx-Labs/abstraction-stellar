@@ -3,11 +3,14 @@ import { pool } from '../db/pool.js';
 import { server } from '../chain/rpc.js';
 import { env } from '../env.js';
 import { countDead } from '../db/queries/outbox.js';
+import { commit, version } from '../version.js';
 
 export const healthRoutes = new Hono();
 
 /** Liveness: o processo está de pé. */
-healthRoutes.get('/health', (c) => c.json({ ok: true, network: env.NETWORK_PASSPHRASE }));
+healthRoutes.get('/health', (c) =>
+  c.json({ ok: true, network: env.NETWORK_PASSPHRASE, version, commit }),
+);
 
 /** Readiness: dá para servir tráfego (banco e RPC respondendo). */
 healthRoutes.get('/health/ready', async (c) => {

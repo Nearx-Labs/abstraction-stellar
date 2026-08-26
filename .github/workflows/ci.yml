@@ -175,6 +175,9 @@ jobs:
         with:
           context: apps/back
           push: ${{ github.event_name != 'pull_request' }}
+          # Vai para /health, para dar resposta a "qual build está no ar?".
+          build-args: |
+            GIT_SHA=${{ github.sha }}
           tags: ${{ steps.meta_back.outputs.tags }}
           labels: ${{ steps.meta_back.outputs.labels }}
           cache-from: type=gha
