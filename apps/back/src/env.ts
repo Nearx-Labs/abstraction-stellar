@@ -125,6 +125,10 @@ const schema = z
     BOOTSTRAP_PUBLISHABLE_KEY: z.string().optional(),
     BOOTSTRAP_NETWORK: z.string().default('testnet'),
     BOOTSTRAP_ORIGINS: csv,
+    // Login do painel pelo ambiente, mesma razão do app: sem isto, criar o
+    // primeiro acesso num ambiente publicado exigiria psql no banco gerenciado.
+    BOOTSTRAP_PANEL_EMAIL: z.string().optional(),
+    BOOTSTRAP_PANEL_PASSWORD: z.string().optional(),
 
     RUN_WORKERS: bool(true),
   })

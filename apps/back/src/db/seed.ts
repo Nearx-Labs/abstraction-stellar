@@ -5,6 +5,9 @@
 // Fora de desenvolvimento isto não roda.
 import { pool } from './pool.js';
 import { hashKey } from './queries/apps.js';
+import * as accounts from './queries/accounts.js';
+import * as master from './queries/master.js';
+import * as panelCredentials from './queries/panelCredentials.js';
 import { env, isDev } from '../env.js';
 import { logger } from '../logger.js';
 
@@ -147,4 +150,65 @@ export async function bootstrapApp(): Promise<void> {
   );
 
   logger.info({ appId, slug }, 'app do ambiente pronto');
+}
+
+/**
+ * Cria o login do painel a partir do ambiente.
+ *
+ * Mesma razão do app: a imagem de produção não tem npm, então `npm run
+ * panel:user` não roda lá dentro e o primeiro acesso a um ambiente publicado
+ * dependeria de psql no banco gerenciado.
+ *
+ * Roda depois de `bootstrapApp` e só quando a conta mestre já existe — ela é
+ * criada por `POST /v1/master/provision`, que é uma chamada explícita e não
+ * parte do boot. No primeiro deploy isto não faz nada e loga o porquê; o boot
+ * seguinte, já com a conta provisionada, cria o login.
+ *
+ * Idempotente: reaplicar troca a senha em vez de duplicar.
+ */
+export async function bootstrapPanelUser(): Promise<void> {
+  const email = env.BOOTSTRAP_PANEL_EMAIL;
+  const password = env.BOOTSTRAP_PANEL_PASSWORD;
+  if (!email || !password) return;
+
+  if (password.length < 8) {
+    throw new Error('BOOTSTRAP_PANEL_PASSWORD precisa de ao menos 8 caracteres');
+  }
+  if (!env.BOOTSTRAP_APP_SLUG) {
+    throw new Error('BOOTSTRAP_PANEL_EMAIL exige BOOTSTRAP_APP_SLUG');
+  }
+
+  const app = await pool.query<{ id: string }>('SELECT id FROM apps WHERE slug = $1', [
+    env.BOOTSTRAP_APP_SLUG,
+  ]);
+  const appId = app.rows[0]?.id;
+  if (!appId) return;
+
+  const contractId = await master.masterAccountOf(appId);
+  if (!contractId) {
+    logger.warn(
+      { slug: env.BOOTSTRAP_APP_SLUG },
+      'login do painel adiado: a conta mestre ainda não existe — ' +
+        'rode POST /v1/master/provision e reinicie',
+    );
+    return;
+  }
+
+  // A conta mestre vive em `apps.master_account`; o login aponta para uma linha
+  // de `smart_accounts`, então ela é registrada aqui em vez de exigir um passo
+  // que ninguém adivinharia.
+  let account = await accounts.byContractId(appId, contractId);
+  if (!account) {
+    await accounts.upsert({
+      appId,
+      contractId,
+      label: `conta mestre de ${env.BOOTSTRAP_APP_SLUG}`,
+      status: 'deployed',
+    });
+    account = await accounts.byContractId(appId, contractId);
+  }
+  if (!account) return;
+
+  await panelCredentials.upsert({ accountId: account.id, email, password });
+  logger.info({ email, contractId }, 'login do painel pronto');
 }
