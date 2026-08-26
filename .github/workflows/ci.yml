@@ -75,8 +75,12 @@ jobs:
       # este diff falha antes disso.
       - name: gerar e comparar
         working-directory: apps/back
+        # `--silent` não é preciosismo: sem ele o npm escreve o próprio cabeçalho
+        # ("> abstraction-back@0.1.0 fixture") no stdout, ele entra na captura e
+        # o diff falha com três linhas a mais — parecendo divergência de
+        # encoding quando o vetor está idêntico.
         run: |
-          npm run fixture > /tmp/vector.txt
+          npm run --silent fixture > /tmp/vector.txt
           diff -u ../../contracts/email-attestation-verifier/fixtures/js_attestation_vector.txt /tmp/vector.txt
 
   front:
