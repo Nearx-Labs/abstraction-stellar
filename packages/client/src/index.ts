@@ -24,6 +24,8 @@ export type LedgerRecord = Schemas['LedgerRecord'];
 export type LedgerEntry = Schemas['LedgerEntry'];
 export type MasterState = Schemas['MasterState'];
 export type SessionGrant = Schemas['SessionGrant'];
+export type Anchor = Schemas['Anchor'];
+export type AnchorResult = Schemas['AnchorResult'];
 
 /**
  * Códigos de erro que a API devolve.
@@ -238,6 +240,42 @@ export class AbstractionClient {
 
     set: (contractId: string): Promise<Ok<paths['/v1/master']['post']>> =>
       this.request('POST', '/v1/master', { contractId }),
+
+    /**
+     * Provisiona a conta mestre inteira — deploy + as duas permissões.
+     *
+     * Sem passkey e sem browser: o tenant não assina nada. Idempotente, então
+     * chamar de novo completa o que faltou em vez de duplicar.
+     */
+    provision: (
+      input: {
+        ledgerMaxItems?: number;
+        anchorMaxItems?: number;
+        periodLedgers?: number;
+      } = {},
+    ): Promise<Ok<paths['/v1/master/provision']['post']>> =>
+      this.request('POST', '/v1/master/provision', input),
+
+    /**
+     * Registra um grant que o browser já criou com a passkey do tenant.
+     *
+     * `target` escolhe o contrato: `ledger` é o inventário de itens, `anchor` é
+     * o histórico contábil. Cada um tem cota própria — registrar um não mexe no
+     * outro.
+     */
+    grant: (input: {
+      contextRuleId?: number | null;
+      maxItems: number;
+      periodLedgers: number;
+      grantTxHash?: string;
+      target?: 'ledger' | 'anchor';
+    }): Promise<Ok<paths['/v1/master/grant']['post']>> =>
+      this.request('POST', '/v1/master/grant', input),
+
+    revokeGrant: (
+      target: 'ledger' | 'anchor' = 'ledger',
+    ): Promise<Ok<paths['/v1/master/grant']['delete']>> =>
+      this.request('DELETE', `/v1/master/grant?target=${target}`),
   };
 
   // ── Ledger ────────────────────────────────────────────────────────────────
@@ -288,6 +326,37 @@ export class AbstractionClient {
       params: { limit?: number; offset?: number } = {},
     ): Promise<Ok<paths['/v1/ledger/entries']['get']>> =>
       this.request('GET', `/v1/ledger/entries${query(params)}`),
+
+    /**
+     * Ancora um evento de negócio — o que **não** é item.
+     *
+     * Compra de crédito, dedução, reembolso, split: coisas sem dono, que
+     * precisam de prova de que aconteceram. Não gastam a cota de mint; o alvo é
+     * o contrato de âncora, que tem grant próprio.
+     *
+     * `amount` é inteiro na MENOR unidade. O campo on-chain é `i128` e não
+     * aceita fracionário — mande `1990`, não `19.90`.
+     *
+     * Não deduplica: mandar duas vezes grava dois eventos. Quem sabe se a
+     * repetição é erro é quem chama.
+     */
+    record: (input: {
+      tenantId: string;
+      kind: string;
+      reference?: string;
+      payload?: Record<string, unknown> | string;
+      amount?: string | number | bigint;
+    }): Promise<Ok<paths['/v1/ledger/record']['post']>> =>
+      this.request('POST', '/v1/ledger/record', {
+        ...input,
+        amount: input.amount === undefined ? undefined : String(input.amount),
+      }),
+
+    /** O histórico de âncoras, com o payload que ficou fora da chain. */
+    records: (
+      params: { limit?: number; offset?: number; kind?: string; reference?: string } = {},
+    ): Promise<Ok<paths['/v1/ledger/records']['get']>> =>
+      this.request('GET', `/v1/ledger/records${query(params)}`),
   };
 
   /**

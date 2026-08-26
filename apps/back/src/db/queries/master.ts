@@ -45,14 +45,35 @@ export async function masterAccountOf(appId: string): Promise<string | null> {
   return res.rows[0]?.master_account ?? null;
 }
 
-export async function activeGrant(appId: string): Promise<MasterGrant | null> {
+/**
+ * O grant ativo de um app para um contrato-alvo.
+ *
+ * O alvo é obrigatório desde 0004_anchor: um app tem um grant por contrato
+ * (inventário no demo-ledger, âncora no anchor-ledger), e responder "o grant do
+ * app" sem dizer qual devolveria um dos dois ao acaso.
+ */
+export async function activeGrant(
+  appId: string,
+  targetContract: string,
+): Promise<MasterGrant | null> {
   const res = await pool.query(
     `SELECT ${GRANT_COLUMNS} FROM master_grants
-      WHERE app_id = $1 AND state IN ('pending', 'active')`,
-    [appId],
+      WHERE app_id = $1 AND target_contract = $2 AND state IN ('pending', 'active')`,
+    [appId, targetContract],
   );
   const row = res.rows[0];
   return row ? mapGrant(row) : null;
+}
+
+/** Todos os grants vivos do app, para a tela de estado mostrar os dois. */
+export async function activeGrants(appId: string): Promise<MasterGrant[]> {
+  const res = await pool.query(
+    `SELECT ${GRANT_COLUMNS} FROM master_grants
+      WHERE app_id = $1 AND state IN ('pending', 'active')
+      ORDER BY created_at ASC`,
+    [appId],
+  );
+  return res.rows.map(mapGrant);
 }
 
 export async function createGrant(input: {
@@ -115,6 +136,23 @@ export function buildPayload(
   return { payload, hash };
 }
 
+/**
+ * Igual ao `buildPayload`, mas com o digest **completo**.
+ *
+ * O hash de mint/transfer vive só no Postgres, e 128 bits bastam ali. O de
+ * âncora vai para o `payload_hash: BytesN<32>` do anchor-ledger — 32 bytes
+ * exatos. Truncar aqui produziria um erro de conversão no momento da
+ * submissão, longe da causa.
+ */
+export function buildAnchorPayload(
+  kind: string,
+  fields: Record<string, unknown>,
+): { payload: string; hash: string } {
+  const payload = JSON.stringify({ type: `ledger_${kind}`, ...fields });
+  const hash = createHash('sha256').update(payload).digest('hex');
+  return { payload, hash };
+}
+
 export async function recordEntry(input: {
   appId: string;
   uuid: string;
@@ -170,6 +208,45 @@ export async function entriesFor(
     payloadHash: r.payload_hash,
     state: r.state,
     txHash: r.tx_hash,
+    createdAt: r.created_at.toISOString(),
+  }));
+}
+
+/**
+ * As entradas de âncora, com o payload completo.
+ *
+ * `reference` casa contra `uuid` porque é lá que a chave de negócio mora nas
+ * linhas de âncora — ver o comentário em 0004_anchor.sql.
+ */
+export async function recordsFor(
+  appId: string,
+  options: { limit?: number; offset?: number; kind?: string; reference?: string } = {},
+): Promise<Array<Record<string, unknown>>> {
+  const res = await pool.query(
+    `SELECT id, uuid, kind, payload, payload_hash, state, tx_hash, error, created_at
+       FROM ledger_entries
+      WHERE app_id = $1
+        AND kind = 'record'
+        AND ($4::text IS NULL OR payload->>'kind' = $4)
+        AND ($5::text IS NULL OR uuid = $5)
+      ORDER BY created_at DESC
+      LIMIT $2 OFFSET $3`,
+    [
+      appId,
+      options.limit ?? 25,
+      options.offset ?? 0,
+      options.kind ?? null,
+      options.reference ?? null,
+    ],
+  );
+  return res.rows.map((r) => ({
+    id: r.id,
+    reference: r.uuid,
+    payload: r.payload,
+    payloadHash: r.payload_hash,
+    state: r.state,
+    txHash: r.tx_hash,
+    error: r.error,
     createdAt: r.created_at.toISOString(),
   }));
 }

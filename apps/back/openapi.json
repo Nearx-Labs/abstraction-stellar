@@ -7,7 +7,7 @@
       "name": "MIT",
       "identifier": "MIT"
     },
-    "description": "Smart accounts na Stellar com login por passkey e taxas patrocinadas.\n\n## Autenticação\n\nTrês modos, e qual vale depende do endpoint:\n\n- **publishable key** (`pk_…`) — pública por construção. Vai no PATH do\n  relay porque o `RelayerClient` do smart-account-kit não manda header\n  nenhum além de `Content-Type` e `X-Client-*`. Identifica o app; quem\n  segura o gasto é a policy, não a chave.\n- **cookie de sessão** — o dono da conta, depois de provar posse da\n  passkey em `/v1/authn/verify`.\n- **secret key** (`sk_…`) — chamada servidor-a-servidor, em\n  `Authorization: Bearer`. Fala por qualquer conta do app.\n\n## Erros\n\nToda falha responde `{success:false, error, errorCode}`. O `errorCode` é\no contrato estável; a mensagem é para humano."
+    "description": "Smart accounts na Stellar com taxas patrocinadas.\n\nDois modelos de custódia, e a escolha é de quem integra:\n\n· **Custodial** (`POST /v1/master/provision`) — a plataforma provisiona a conta e as permissões com chaves derivadas. O tenant faz login no portal e já encontra tudo pronto: não registra digital, não guarda seed, não assina nada. É o caminho para quem quer a chain invisível.\n\n· **Auto-custódia** (painel + passkey) — o dono cria a conta com passkey e concede as permissões ele mesmo. Ninguém além dele assina.\n\n## Autenticação\n\nTrês modos, e qual vale depende do endpoint:\n\n- **publishable key** (`pk_…`) — pública por construção. Vai no PATH do\n  relay porque o `RelayerClient` do smart-account-kit não manda header\n  nenhum além de `Content-Type` e `X-Client-*`. Identifica o app; quem\n  segura o gasto é a policy, não a chave.\n- **cookie de sessão** — o dono da conta, depois de provar posse da\n  passkey em `/v1/authn/verify`.\n- **secret key** (`sk_…`) — chamada servidor-a-servidor, em\n  `Authorization: Bearer`. Fala por qualquer conta do app.\n\n## Erros\n\nToda falha responde `{success:false, error, errorCode}`. O `errorCode` é\no contrato estável; a mensagem é para humano."
   },
   "servers": [
     {
@@ -436,6 +436,141 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/authn/password": {
+      "post": {
+        "operationId": "authnPassword",
+        "tags": [
+          "authn"
+        ],
+        "summary": "Sessão do painel por e-mail e senha",
+        "description": "Para a conta mestre **custodial**, que não tem passkey registrada — ela\né provisionada pelo serviço com chave derivada, e sem este caminho o dono\nnão conseguiria abrir o próprio painel.\n\nProva quem é o humano, não quem controla a chave. A sessão dá leitura e\nas operações que o SERVIÇO executa em nome da conta; assinar no browser\ncontinua exigindo passkey, e no modelo custodial ninguém assina no browser.\n\nE-mail inexistente e senha errada devolvem a mesma coisa, de propósito.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "email",
+                  "password"
+                ],
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "password": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sessão aberta; o cookie httpOnly vai no Set-Cookie.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "contractId": {
+                      "type": "string"
+                    },
+                    "custodial": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/authn/session": {
+      "get": {
+        "operationId": "authnSession",
+        "tags": [
+          "authn"
+        ],
+        "summary": "Quem está logado nesta sessão",
+        "description": "O painel usa para sobreviver a um reload. Com passkey a conta vem do IndexedDB do kit; numa sessão custodial o browser não guarda nada, e o cookie httpOnly não é legível por JS. `custodial` é derivado da ausência de passkey na conta.",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A conta desta sessão.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "contractId": {
+                      "type": "string"
+                    },
+                    "custodial": {
+                      "type": "boolean"
+                    }
+                  }
                 }
               }
             }
@@ -1479,6 +1614,83 @@
         }
       }
     },
+    "/v1/master/provision": {
+      "post": {
+        "operationId": "provisionMaster",
+        "tags": [
+          "master"
+        ],
+        "summary": "Provisiona a conta mestre do tenant, sem passkey",
+        "description": "O caminho do produto: o tenant faz login social e já encontra a conta\npronta. Não registra digital, não guarda seed, não assina nada.\n\nTrês transações patrocinadas: deploy da smart account com a chave de\nOWNER na regra `Default`, depois uma regra `CallContract` por alvo com a\nchave do SERVIÇO e a cota instalada.\n\nDuas chaves porque a cota precisa ser fronteira de verdade: a chave que\nminta todo dia não está na `Default`, então não consegue alterar a regra\nque a limita, adicionar signer nem mover fundos.\n\n**Idempotente.** O endereço é derivado do app, então repetir encontra a\nconta existente e completa só o que falta — útil quando a segunda regra\nfalhou e a primeira não.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "secretKey": []
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ledgerMaxItems": {
+                    "type": "integer",
+                    "default": 10000,
+                    "description": "Teto de itens do inventário."
+                  },
+                  "anchorMaxItems": {
+                    "type": "integer",
+                    "default": 50000,
+                    "description": "Teto de eventos ancorados."
+                  },
+                  "periodLedgers": {
+                    "type": "integer",
+                    "default": 518400,
+                    "description": "Janela deslizante. Default: 30 dias."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Provisionada.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisionResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/master/grant": {
       "post": {
         "operationId": "registerMasterGrant",
@@ -1521,6 +1733,15 @@
                   },
                   "grantTxHash": {
                     "type": "string"
+                  },
+                  "target": {
+                    "type": "string",
+                    "enum": [
+                      "ledger",
+                      "anchor"
+                    ],
+                    "default": "ledger",
+                    "description": "Qual contrato a regra autoriza: `ledger` é o inventário de itens, `anchor` é o histórico contábil. Cada um tem cota própria — reconceder um não mexe no outro."
                   }
                 }
               }
@@ -1582,6 +1803,21 @@
           },
           {
             "secretKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "target",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ledger",
+                "anchor"
+              ],
+              "default": "ledger"
+            },
+            "description": "Qual grant revogar. Omitido, o do inventário."
           }
         ],
         "responses": {
@@ -1805,6 +2041,211 @@
             }
           },
           "502": {
+            "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ledger/record": {
+      "post": {
+        "operationId": "recordAnchor",
+        "tags": [
+          "ledger"
+        ],
+        "summary": "Ancora um evento de negócio",
+        "description": "Para o que **não** é item: compra de crédito, dedução, reembolso, split,\ncancelamento. Não tem dono, não entra no inventário e não gasta a cota de\nmint — o alvo é o contrato de âncora, com grant próprio.\n\nOn-chain vai o indispensável (tenant, tipo, referência, valor e o sha256\ndo payload). O JSON inteiro fica off-chain e o hash amarra os dois: dá\npara provar depois que o registro guardado não foi editado.\n\n**Não deduplica.** Dois `credit_lock` da mesma transação são dois eventos,\ne recusar o segundo apagaria histórico real. Quem deduplica é o consumidor,\nque tem o contexto.",
+        "security": [
+          {
+            "secretKey": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "tenantId",
+                  "kind"
+                ],
+                "properties": {
+                  "tenantId": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "description": "Tenant do sistema consumidor. Vai gravado no registro."
+                  },
+                  "kind": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z0-9_]{1,32}$",
+                    "description": "Tipo do evento. Vira `Symbol` on-chain, daí o alfabeto restrito.",
+                    "examples": [
+                      "credit_purchase",
+                      "refund",
+                      "marketplace_transfer"
+                    ]
+                  },
+                  "reference": {
+                    "type": "string",
+                    "maxLength": 128,
+                    "description": "Chave de negócio (transactionId / orderId / listingId) — é por ela que se acha o registro do outro lado."
+                  },
+                  "payload": {
+                    "oneOf": [
+                      {
+                        "type": "object"
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
+                    "description": "O evento completo. Fica off-chain; só o hash sobe."
+                  },
+                  "amount": {
+                    "type": [
+                      "string",
+                      "integer"
+                    ],
+                    "description": "Inteiro na MENOR unidade (centavos). `i128` não aceita fracionário — `19.90` é recusado, `1990` não. Default: 1."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Ancorado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnchorResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`QUOTA_EXCEEDED`: a cota de âncoras acabou.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`NO_GRANT`: o tenant não concedeu o grant de âncora.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ledger/records": {
+      "get": {
+        "operationId": "listAnchors",
+        "tags": [
+          "ledger"
+        ],
+        "summary": "Histórico de âncoras, com o payload completo",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "secretKey": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 25,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 0
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filtra pelo tipo do evento."
+          },
+          {
+            "name": "reference",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filtra pela chave de negócio."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Âncoras, da mais recente para a mais antiga.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnchorPage"
+                }
+              }
+            }
+          },
+          "401": {
             "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
             "content": {
               "application/json": {
@@ -2967,6 +3408,9 @@
           "ledgerContract": {
             "type": "string"
           },
+          "anchorContract": {
+            "type": "string"
+          },
           "policyContract": {
             "type": "string"
           },
@@ -2974,7 +3418,32 @@
             "type": [
               "object",
               "null"
-            ]
+            ],
+            "description": "O grant do INVENTÁRIO. Mantido no singular para o painel antigo; os dois alvos estão em `targets`."
+          },
+          "targets": {
+            "type": "object",
+            "description": "Grant e cota por alvo, indexados por `ledger` e `anchor`.",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "contract": {
+                  "type": "string"
+                },
+                "grant": {
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "quota": {
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                }
+              }
+            }
           },
           "quota": {
             "type": [
@@ -2995,6 +3464,142 @@
               "windowResetsAtLedger": {
                 "type": "integer"
               }
+            }
+          }
+        }
+      },
+      "ProvisionResult": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "masterAccount": {
+            "type": "string"
+          },
+          "deployHash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`null` quando a conta já existia — repetir não redeploya."
+          },
+          "owner": {
+            "type": "string",
+            "description": "Chave que administra a conta (regra Default)."
+          },
+          "signer": {
+            "type": "object",
+            "properties": {
+              "publicKeyHex": {
+                "type": "string"
+              },
+              "verifier": {
+                "type": "string"
+              }
+            }
+          },
+          "granted": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "type": "string",
+                  "enum": [
+                    "ledger",
+                    "anchor"
+                  ]
+                },
+                "contextRuleId": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "hash": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "AnchorResult": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "hash": {
+            "type": "string",
+            "description": "Transação Stellar que gravou o registro."
+          },
+          "contract": {
+            "type": "string"
+          },
+          "payloadHash": {
+            "type": "string",
+            "description": "sha256 COMPLETO (64 hex) do payload gravado. É o que o contrato guarda em `BytesN<32>` e o que `verify` confere."
+          },
+          "entryId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "Anchor": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "object"
+          },
+          "payloadHash": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "confirmed",
+              "failed"
+            ]
+          },
+          "txHash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AnchorPage": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Anchor"
             }
           }
         }

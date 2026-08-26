@@ -8,7 +8,7 @@ import { buildApp } from './app.js';
 import { env } from './env.js';
 import { logger } from './logger.js';
 import { migrate } from './db/migrate.js';
-import { seedDev } from './db/seed.js';
+import { bootstrapApp, seedDev } from './db/seed.js';
 import { pool } from './db/pool.js';
 import { allKeys, ensureFundedInDev } from './chain/keys.js';
 import { syncChannels } from './db/queries/channels.js';
@@ -23,6 +23,7 @@ const app = buildApp();
 // antes de qualquer lease.
 await migrate();
 await seedDev();
+await bootstrapApp();
 await ensureFundedInDev();
 await syncChannels(allKeys.map(({ role, keypair }) => ({ role, publicKey: keypair.publicKey() })));
 

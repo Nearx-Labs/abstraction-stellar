@@ -1,14 +1,17 @@
-// Assinatura como conta mestre, sem passkey.
+// Assinatura como conta mestre, sem passkey em momento nenhum.
 //
-// A conta mestre de um tenant é uma smart account cujo controle humano está na
-// regra Default (passkey). Para o serviço mintar sozinho, o tenant concede uma
-// segunda regra: `CallContract(demo-ledger)` com um signer Ed25519 que esta API
-// detém e a mint-quota-policy instalada. Daí em diante o serviço assina — mas
-// só aquele contrato, e só até o número de itens que o tenant autorizou.
+// A conta mestre de um tenant é uma smart account com duas camadas de chave,
+// ambas Ed25519 e ambas derivadas (ver managedAccount.ts):
 //
-// A chave Ed25519 NÃO é guardada em banco: ela é derivada de um segredo do
-// processo mais o id do app. Assim não existe segredo em repouso no Postgres, e
-// a chave é reconstruível em qualquer réplica.
+//   · OWNER, na regra Default — administra a conta: cria e remove regras.
+//     Usada uma vez, no provisionamento.
+//   · SERVIÇO, nas regras `CallContract(alvo)` com a mint-quota-policy — é a
+//     que assina mint e âncora, todo dia, e não consegue mexer na regra que a
+//     limita nem mover fundos.
+//
+// Nenhuma das duas é guardada em banco: são derivadas de um segredo do processo
+// mais o id do app. Não existe segredo em repouso no Postgres, e as chaves são
+// reconstruíveis em qualquer réplica.
 import {
   Address,
   Keypair,
@@ -113,8 +116,18 @@ export async function invokeAsMaster(options: {
   args: xdr.ScVal[];
   contextRuleId: number;
   payer: Keypair;
+  /**
+   * Chave que assina pela conta. Default: a do serviço, que só existe nas
+   * regras com policy instalada.
+   *
+   * O provisionamento passa a chave de OWNER, que vive na regra Default — é a
+   * única que pode administrar a conta (criar as regras do serviço). Separá-las
+   * é o que mantém a cota como fronteira real: a chave que minta não consegue
+   * mexer na regra que a limita.
+   */
+  signer?: Keypair;
 }): Promise<MasterInvokeResult> {
-  const keypair = masterSignerFor(options.appId);
+  const keypair = options.signer ?? masterSignerFor(options.appId);
 
   const hostFunction = xdr.HostFunction.hostFunctionTypeInvokeContract(
     new xdr.InvokeContractArgs({

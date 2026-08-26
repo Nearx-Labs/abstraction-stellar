@@ -2,6 +2,15 @@
 //
 // Restaurar a sessão do kit (IndexedDB) não basta — o painel também precisa do
 // cookie httpOnly. Por isso o `connect` sempre passa pela assertion de passkey.
+//
+// Dois modos de entrar, e a diferença importa para o que a tela pode oferecer:
+//
+//   · PASSKEY — o browser controla a chave. Dá para assinar: criar regra,
+//     revogar, transferir.
+//   · SENHA — a conta é custodial, provisionada pelo serviço com chave
+//     derivada. O browser não tem chave nenhuma; assinar é impossível aqui, e
+//     quem opera em nome da conta é o serviço. `custodial` sinaliza isso para
+//     as telas não oferecerem um botão que não funcionaria.
 import {
   createContext,
   useCallback,
@@ -27,10 +36,13 @@ export type WalletStage =
 interface WalletState {
   contractId: string | null;
   stage: WalletStage;
+  /** Sessão aberta por senha: o browser não controla a chave desta conta. */
+  custodial: boolean;
   /** Conta criada on-chain mas não registrada no painel — dá para reenviar. */
   registrationPending: boolean;
   createWallet: () => Promise<void>;
   connectWallet: () => Promise<void>;
+  loginWithPassword: (email: string, password: string) => Promise<void>;
   retryRegistration: () => Promise<void>;
   disconnect: () => Promise<void>;
 }
@@ -40,6 +52,7 @@ const WalletContext = createContext<WalletState | null>(null);
 export function WalletProvider({ children }: { children: ReactNode }) {
   const [contractId, setContractId] = useState<string | null>(null);
   const [stage, setStage] = useState<WalletStage>('restoring');
+  const [custodial, setCustodial] = useState(false);
   const [registrationPending, setRegistrationPending] = useState(false);
   const [pendingRegistration, setPendingRegistration] = useState<{
     contractId: string;
@@ -47,25 +60,45 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     publicKeyHex?: string;
   } | null>(null);
 
-  // Restaura a conta guardada pelo kit; a sessão do painel vem depois, no
-  // primeiro toque na passkey.
+  // Restauração no boot, nesta ordem:
+  //
+  //  1. o kit (IndexedDB) — conta com passkey neste navegador;
+  //  2. o cookie de sessão — conta custodial, onde o browser não guarda nada e
+  //     o cookie httpOnly é toda a memória que existe.
+  //
+  // Sem o passo 2, recarregar a página numa sessão custodial jogava o usuário
+  // de volta para a tela de login com a sessão ainda válida.
   useEffect(() => {
     let cancelled = false;
-    kit
-      .connectWallet()
-      .then((restored) => {
+
+    (async () => {
+      try {
+        const restored = await kit.connectWallet();
         if (cancelled) return;
         if (restored?.contractId) {
           setContractId(restored.contractId);
           // Recarrega no kit as chaves de grant guardadas neste navegador —
           // é o que faz um grant sem prazo continuar utilizável após reload.
           restoreSessions(kit, restored.contractId);
+          setStage('idle');
+          return;
         }
-        setStage('idle');
-      })
-      .catch(() => {
-        if (!cancelled) setStage('idle');
-      });
+      } catch {
+        // sem conta local; tenta o cookie abaixo
+      }
+
+      try {
+        const session = await endpoints.session();
+        if (cancelled) return;
+        setContractId(session.contractId);
+        setCustodial(session.custodial);
+      } catch {
+        // sem sessão: cai na tela de login, que é o certo
+      }
+
+      if (!cancelled) setStage('idle');
+    })();
+
     return () => {
       cancelled = true;
     };
@@ -116,8 +149,26 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       const result = await kit.connectWallet({ prompt: true });
       if (!result?.contractId) throw new Error('Nenhuma conta encontrada para esta passkey.');
       setContractId(result.contractId);
+      setCustodial(false);
       restoreSessions(kit, result.contractId);
       await openPanelSession(result.contractId);
+      setStage('ready');
+    } catch (error) {
+      setStage('idle');
+      throw error;
+    }
+  }, []);
+
+  /**
+   * Entra na conta custodial. Sem kit e sem IndexedDB: não há chave para
+   * guardar deste lado — o cookie httpOnly é toda a sessão.
+   */
+  const loginWithPassword = useCallback(async (email: string, password: string) => {
+    setStage('registering');
+    try {
+      const result = await endpoints.password(email, password);
+      setContractId(result.contractId);
+      setCustodial(true);
       setStage('ready');
     } catch (error) {
       setStage('idle');
@@ -132,27 +183,34 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   const disconnect = useCallback(async () => {
     await endpoints.logout().catch(() => {});
-    await kit.disconnect();
+    // Numa sessão custodial o kit nunca guardou nada; `disconnect` seria no-op,
+    // mas chamá-lo apagaria a passkey de quem alterna entre os dois modos.
+    if (!custodial) await kit.disconnect();
     setContractId(null);
+    setCustodial(false);
     setStage('idle');
-  }, []);
+  }, [custodial]);
 
   const value = useMemo(
     () => ({
       contractId,
       stage,
+      custodial,
       registrationPending,
       createWallet,
       connectWallet,
+      loginWithPassword,
       retryRegistration,
       disconnect,
     }),
     [
       contractId,
       stage,
+      custodial,
       registrationPending,
       createWallet,
       connectWallet,
+      loginWithPassword,
       retryRegistration,
       disconnect,
     ],

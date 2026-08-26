@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { ChevronDown, ExternalLink, Fingerprint } from 'lucide-react';
-import { Alert, Button, Card } from '@/components/ui';
+import { ChevronDown, ExternalLink, Fingerprint, LogIn } from 'lucide-react';
+import { Alert, Button, Card, Field, Input } from '@/components/ui';
 import { useWallet } from '@/hooks/useWallet';
 import { DEPLOYED_CONTRACTS, contractUrl } from '@/lib/config';
 import { truncateAddress } from '@/lib/utils';
@@ -13,11 +13,22 @@ const STAGE_LABEL: Record<string, string> = {
   registering: 'Quase lá…',
 };
 
+type Mode = 'passkey' | 'password';
+
 export function Onboarding() {
-  const { stage, createWallet, connectWallet, registrationPending, retryRegistration } =
-    useWallet();
+  const {
+    stage,
+    createWallet,
+    connectWallet,
+    loginWithPassword,
+    registrationPending,
+    retryRegistration,
+  } = useWallet();
   const navigate = useNavigate();
   const [showContracts, setShowContracts] = useState(false);
+  const [mode, setMode] = useState<Mode>('passkey');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
 
   const busy = stage === 'webauthn' || stage === 'deploying' || stage === 'registering';
 
@@ -41,10 +52,71 @@ export function Onboarding() {
           Sua conta Stellar sem seed phrase
         </h1>
         <p className="text-sm text-muted">
-          Entre com a digital do seu device. Nós pagamos as taxas.
+          Passkey para auto-custódia, e-mail e senha para a conta que o serviço provisionou.
+          Nós pagamos as taxas nos dois casos.
         </p>
       </div>
 
+      <div className="flex gap-2 rounded-xl border border-border p-1">
+        {(
+          [
+            ['passkey', 'Passkey'],
+            ['password', 'E-mail e senha'],
+          ] as const
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            onClick={() => setMode(value)}
+            className={
+              mode === value
+                ? 'flex-1 rounded-lg bg-primary/10 px-3 py-2 text-sm text-fg'
+                : 'flex-1 rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:text-fg'
+            }
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {mode === 'password' ? (
+        <Card className="space-y-4">
+          <p className="text-sm text-muted">
+            É assim que se entra numa <strong className="text-fg">conta custodial</strong> — a
+            que o serviço provisionou. Ela não tem passkey registrada: a chave é derivada e fica
+            com a plataforma, então aqui você prova quem é, não que controla a chave.
+          </p>
+
+          <form
+            className="space-y-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void run(() => loginWithPassword(email, password), 'Bem-vindo de volta.');
+            }}
+          >
+            <Field label="E-mail">
+              <Input
+                type="email"
+                autoComplete="username"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+              />
+            </Field>
+
+            <Field label="Senha">
+              <Input
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+            </Field>
+
+            <Button full size="lg" type="submit" loading={busy} disabled={!email || !password}>
+              <LogIn className="size-4" /> Entrar
+            </Button>
+          </form>
+        </Card>
+      ) : (
       <Card className="space-y-3">
         {registrationPending && (
           <Alert
@@ -89,6 +161,7 @@ export function Onboarding() {
           Já tenho uma conta
         </Button>
       </Card>
+      )}
 
       <footer className="space-y-3 text-center">
         <p className="text-xs text-muted">Testnet · Protocolo 27</p>

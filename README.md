@@ -39,6 +39,7 @@ contracts/
   spending-limit-policy/       # teto de VALOR numa janela deslizante
   mint-quota-policy/           # teto de VOLUME numa janela deslizante
   demo-ledger/                 # inventário de itens por UUID
+  anchor-ledger/               # âncora de eventos de negócio (o que não é item)
 ```
 
 A autorização é organizada em *context rules*: cada regra vincula signers
@@ -62,6 +63,33 @@ restrita e reapresentá-la sob a `Default`.
 | Spending-limit policy | `CC3GRDE3QDLXFOZJMC6SNZHRKWGQXELANBJWS6T3H7GO77K4NRKFUIDT` |
 | Mint-quota policy | `CCKCKDXEWD3LHSZT3OLTJTRFNMXPQPONKUPQPQJ2CAXFVNACJDFAYWVJ` |
 | Demo ledger | `CCBGDWXPHXPGYJL2T4GDIF6PAGZ3XVYFR67HBFQ5RVJXGNMT5KGCUD5G` |
+| Anchor ledger | `CAJLZT55SAI5U23QK3EBGBKHIJSOASKACLVRTTVAK6WHVOUYYGLO3YTA` |
+
+## Como se entra
+
+Dois modos, e a escolha é sobre custódia — não sobre conveniência:
+
+| | quem controla a chave | como entra |
+|---|---|---|
+| **auto-custódia** | o usuário, pela passkey | `POST /v1/authn/challenge` · `/verify` |
+| **custodial** | a plataforma, com chave derivada | `POST /v1/authn/password` |
+
+A conta custodial é provisionada inteira pelo serviço — deploy e permissões —
+com `POST /v1/master/provision`. O tenant não registra digital, não guarda seed
+e não assina nada; ele faz login e encontra a conta pronta. É o modelo para
+quem quer a chain invisível.
+
+```bash
+cd apps/back
+npm run app:create  -- --slug acme --name "Acme"
+curl -X POST $API/v1/master/provision -H "Authorization: Bearer sk_…" -d '{}'
+npm run panel:user  -- --app acme --email dono@acme.com --password ...
+```
+
+O login por senha prova **quem é o humano**, não quem controla a chave — e é
+por isso que uma sessão dessas não assina nada no browser: as operações da
+conta são executadas pelo serviço. O painel esconde os botões que dependeriam
+de uma chave local em vez de oferecê-los para falhar.
 
 ## O grant de app
 
@@ -150,7 +178,8 @@ on-chain.
 | | |
 |---|---|
 | `POST /v1/accounts` | registra a conta |
-| `POST /v1/authn/challenge` · `/verify` · `/logout` | sessão do painel |
+| `POST /v1/authn/challenge` · `/verify` · `/logout` | sessão do painel, por passkey |
+| `POST /v1/authn/password` · `GET /v1/authn/session` | sessão do painel, por e-mail e senha |
 | `GET /v1/accounts/:address` | saldo, status, allowance |
 | `GET /v1/accounts/:address/usage` | cota do dia, off-chain e on-chain |
 | `POST` `GET /v1/accounts/:address/faucet` | XLM de testnet + ativação da cota |
@@ -161,12 +190,15 @@ on-chain.
 
 | | |
 |---|---|
+| `POST /v1/master/provision` | provisiona a conta e as permissões, sem passkey |
 | `GET` `POST /v1/master` | conta mestre do tenant e chave do serviço |
 | `POST` `DELETE /v1/master/grant` | permissão concedida ao serviço |
 | `POST /v1/ledger/mint` | minta um lote como a conta mestre |
 | `POST /v1/ledger/transfer` | venda: passa a posse de um item |
 | `GET /v1/ledger` · `/v1/ledger/:uuid` | o ledger, lido on-chain |
 | `GET /v1/ledger/entries` | o payload completo dos eventos |
+| `POST /v1/ledger/record` | ancora um evento de negócio |
+| `GET /v1/ledger/records` | o histórico de âncoras |
 
 `external_id` amarra o usuário do sistema consumidor à smart account:
 
@@ -222,6 +254,40 @@ A chave Ed25519 do serviço não é guardada: é derivada de `MASTER_SIGNER_SEED
 `app_id`. Não há segredo em repouso no Postgres, e a chave é reconstruível em
 qualquer réplica. O banco guarda só a pública, para conferir que o grant
 on-chain aponta para a chave que o processo realmente tem.
+
+## Âncora — o que não é item
+
+Nem todo evento vira NFT. Um sistema financeiro tem compra de crédito, dedução,
+reembolso, split, cancelamento: coisas sem dono, que não entram em inventário
+nenhum, mas que precisam de prova de que aconteceram e de que o registro
+guardado não foi editado depois.
+
+```ts
+await abstraction.ledger.record({
+  tenantId, kind: 'refund', reference: transactionId,
+  payload: evento, amount: 1990,          // centavos: o campo on-chain é i128
+});
+```
+
+On-chain vai o indispensável — tenant, tipo, referência, valor e o **sha256
+completo** do payload. O JSON fica no Postgres. Os dois lados se auditam: o
+banco tem o texto, a chain tem o hash e o carimbo de tempo, e
+`AnchorLedger.verify(seq, hash)` fecha o ciclo.
+
+**Contrato separado, grant separado.** A mint-quota-policy cobra 1 unidade de
+qualquer função que não seja `mint_batch` — se a âncora morasse no demo-ledger,
+cada reembolso comeria uma unidade da cota de itens que o tenant autorizou para
+o inventário, e o teto viraria duas coisas somadas. Então são dois alvos e duas
+regras: `CallContract(demo-ledger)` para o inventário, `CallContract(anchor-ledger)`
+para o histórico. Cada um com seu número, revogável em separado.
+
+**A âncora não deduplica**, e o mint sim. Dois `credit_lock` da mesma transação
+são dois eventos reais; recusar o segundo apagaria histórico. Item repetido, ao
+contrário, é sempre erro — e aí o contrato recusa com `UuidTaken`.
+
+O digest é completo, não truncado: `payload_hash` é `BytesN<32>` e recusa 16
+bytes. Por isso `buildAnchorPayload` existe ao lado de `buildPayload`, que
+guarda 32 chars porque o hash de mint nunca sai do banco.
 
 ## Fee abstraction
 
@@ -296,7 +362,7 @@ Contratos e testes prontos; ainda sem UI.
 Contratos (Rust/Soroban, requer stellar-cli ≥ 25.2 e target `wasm32v1-none`):
 
 ```bash
-cargo test --workspace     # 67 testes
+cargo test --workspace     # 80 testes
 stellar contract build
 ```
 
@@ -313,6 +379,16 @@ boot, cria o app `demo` com `pk_test_dev`/`sk_test_dev`, deriva as chaves de
 serviço de forma determinística e as financia no friendbot. Fora de
 `NODE_ENV=development` o processo **não sobe** sem os segredos.
 
+Um tenant real não usa o app `demo` — ele tem chaves próprias e cota isolada:
+
+```bash
+cd apps/back && npm run app:create -- --slug acme --name "Acme" --origin https://acme.exemplo
+```
+
+As chaves saem no stdout **uma vez**; o banco guarda só o sha256. O que falta
+depois exige passkey e por isso não é automatizável: registrar a conta mestre e
+conceder os dois grants.
+
 ### Duas armadilhas que o CI vigia
 
 Ambas produzem erros que não apontam para a causa, e as duas já morderam:
@@ -320,6 +396,11 @@ Ambas produzem erros que não apontam para a causa, e as duas já morderam:
 - **`npm run check-sdk`** — duas cópias do `@stellar/stellar-sdk` fazem o `Spec`
   do contrato rejeitar os ScVal que o app constrói, porque a conversão checa o
   construtor do valor. O erro que sai é `cannot interpret n3 value as ScVal`.
+- **`npm run check-sdk`** também pega o caso que já mordeu de verdade: o back
+  em `^14.6.1` e o kit exigindo `16.0.1` fazia o npm aninhar uma segunda cópia,
+  e TODA assinatura como conta mestre morria com
+  `XDR Write Error: … is not a Hyper`. A versão aqui, no `apps/front` e a que o
+  kit pede têm que ser a mesma.
 - **`npm run check-args`** — campos tipados como `Val` no contrato (policies de
   uma context rule, `target_args` de um `execute`) só aceitam ScVal pronto.
   Objeto simples dá `Received object … did not match the provided type`, e é o

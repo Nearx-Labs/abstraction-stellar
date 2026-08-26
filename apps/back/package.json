@@ -12,11 +12,14 @@
     "fixture": "tsx src/email/fixture.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "openapi:export": "tsx scripts/export-openapi.ts"
+    "openapi:export": "tsx scripts/export-openapi.ts",
+    "app:create": "tsx scripts/create-app.ts",
+    "check-sdk": "tsx scripts/check-sdk.ts",
+    "panel:user": "tsx scripts/panel-user.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.0",
-    "@stellar/stellar-sdk": "^14.6.1",
+    "@stellar/stellar-sdk": "16.0.1",
     "hono": "^4.6.0",
     "pg": "^8.13.1",
     "pino": "^9.5.0",

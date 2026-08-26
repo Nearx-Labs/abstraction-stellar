@@ -95,6 +95,8 @@ describe('spec OpenAPI', () => {
       'POST /v1/relay/{publishableKey}',
       'POST /v1/authn/challenge',
       'POST /v1/authn/verify',
+      // O login por senha é a porta de entrada: exigir sessão aqui seria circular.
+      'POST /v1/authn/password',
       'POST /v1/accounts',
       'GET /v1/ledger',
       'GET /v1/ledger/{uuid}',

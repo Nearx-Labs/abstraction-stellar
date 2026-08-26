@@ -51,6 +51,19 @@ const schema = z
     DEMO_LEDGER_CONTRACT_ID: z
       .string()
       .default('CCBGDWXPHXPGYJL2T4GDIF6PAGZ3XVYFR67HBFQ5RVJXGNMT5KGCUD5G'),
+    // Contrato de âncora de eventos de negócio (contracts/anchor-ledger).
+    // Alvo separado do demo-ledger de propósito: o inventário e o histórico
+    // contábil têm cotas independentes, cada um com seu grant.
+    ANCHOR_CONTRACT_ID: z
+      .string()
+      .default('CAJLZT55SAI5U23QK3EBGBKHIJSOASKACLVRTTVAK6WHVOUYYGLO3YTA'),
+    /**
+     * Wasm da smart account, para o serviço provisionar a conta mestre de um
+     * tenant sem browser. Mesmo hash que o painel usa.
+     */
+    ACCOUNT_WASM_HASH: z
+      .string()
+      .default('750df2a268be9743d390ef65a496d9013df5c66127212be70cb856c55b426daa'),
     ED25519_VERIFIER_ADDRESS: z
       .string()
       .default('CCNJDEL774D5UIOEYXIJZRY3HVVR4FIKGGURY34TFCWPAC25QYNRUKMJ'),
@@ -103,6 +116,15 @@ const schema = z
     // Encaminhamento opcional pro OpenZeppelin Channels
     CHANNELS_URL: z.string().url().optional(),
     CHANNELS_API_KEY: z.string().optional(),
+
+    // Bootstrap do app pelo ambiente. A imagem de produção não tem npm, então
+    // sem isto registrar um app exigiria SQL na mão no banco gerenciado.
+    BOOTSTRAP_APP_SLUG: z.string().optional(),
+    BOOTSTRAP_APP_NAME: z.string().optional(),
+    BOOTSTRAP_SECRET_KEY: z.string().optional(),
+    BOOTSTRAP_PUBLISHABLE_KEY: z.string().optional(),
+    BOOTSTRAP_NETWORK: z.string().default('testnet'),
+    BOOTSTRAP_ORIGINS: csv,
 
     RUN_WORKERS: bool(true),
   })

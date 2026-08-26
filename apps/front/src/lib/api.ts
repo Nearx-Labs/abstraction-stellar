@@ -151,6 +151,20 @@ export const endpoints = {
   verify: (body: Record<string, string>) =>
     api.post<{ success: true; contractId: string }>('/v1/authn/verify', body),
 
+  /**
+   * Login por e-mail e senha — o caminho da conta mestre custodial, que não
+   * tem passkey registrada.
+   */
+  password: (email: string, password: string) =>
+    api.post<{ success: true; contractId: string; custodial: boolean }>(
+      '/v1/authn/password',
+      { email, password },
+    ),
+
+  /** Quem está logado. É como uma sessão custodial sobrevive a um reload. */
+  session: () =>
+    api.get<{ success: true; contractId: string; custodial: boolean }>('/v1/authn/session'),
+
   logout: () => api.post<{ success: true }>('/v1/authn/logout'),
 
   account: (address: string) => api.get<AccountResponse>(`/v1/accounts/${address}`),

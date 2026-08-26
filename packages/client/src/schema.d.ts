@@ -103,6 +103,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/authn/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sessão do painel por e-mail e senha
+         * @description Para a conta mestre **custodial**, que não tem passkey registrada — ela
+         *     é provisionada pelo serviço com chave derivada, e sem este caminho o dono
+         *     não conseguiria abrir o próprio painel.
+         *
+         *     Prova quem é o humano, não quem controla a chave. A sessão dá leitura e
+         *     as operações que o SERVIÇO executa em nome da conta; assinar no browser
+         *     continua exigindo passkey, e no modelo custodial ninguém assina no browser.
+         *
+         *     E-mail inexistente e senha errada devolvem a mesma coisa, de propósito.
+         */
+        post: operations["authnPassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/authn/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Quem está logado nesta sessão
+         * @description O painel usa para sobreviver a um reload. Com passkey a conta vem do IndexedDB do kit; numa sessão custodial o browser não guarda nada, e o cookie httpOnly não é legível por JS. `custodial` é derivado da ausência de passkey na conta.
+         */
+        get: operations["authnSession"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/authn/logout": {
         parameters: {
             query?: never;
@@ -314,6 +362,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/master/provision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Provisiona a conta mestre do tenant, sem passkey
+         * @description O caminho do produto: o tenant faz login social e já encontra a conta
+         *     pronta. Não registra digital, não guarda seed, não assina nada.
+         *
+         *     Três transações patrocinadas: deploy da smart account com a chave de
+         *     OWNER na regra `Default`, depois uma regra `CallContract` por alvo com a
+         *     chave do SERVIÇO e a cota instalada.
+         *
+         *     Duas chaves porque a cota precisa ser fronteira de verdade: a chave que
+         *     minta todo dia não está na `Default`, então não consegue alterar a regra
+         *     que a limita, adicionar signer nem mover fundos.
+         *
+         *     **Idempotente.** O endereço é derivado do app, então repetir encontra a
+         *     conta existente e completa só o que falta — útil quando a segunda regra
+         *     falhou e a primeira não.
+         */
+        post: operations["provisionMaster"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/master/grant": {
         parameters: {
             query?: never;
@@ -371,6 +452,53 @@ export interface paths {
         put?: never;
         /** Venda: passa a posse de um item */
         post: operations["transferItem"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/ledger/record": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ancora um evento de negócio
+         * @description Para o que **não** é item: compra de crédito, dedução, reembolso, split,
+         *     cancelamento. Não tem dono, não entra no inventário e não gasta a cota de
+         *     mint — o alvo é o contrato de âncora, com grant próprio.
+         *
+         *     On-chain vai o indispensável (tenant, tipo, referência, valor e o sha256
+         *     do payload). O JSON inteiro fica off-chain e o hash amarra os dois: dá
+         *     para provar depois que o registro guardado não foi editado.
+         *
+         *     **Não deduplica.** Dois `credit_lock` da mesma transação são dois eventos,
+         *     e recusar o segundo apagaria histórico real. Quem deduplica é o consumidor,
+         *     que tem o contexto.
+         */
+        post: operations["recordAnchor"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/ledger/records": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Histórico de âncoras, com o payload completo */
+        get: operations["listAnchors"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -749,8 +877,18 @@ export interface components {
                 verifier?: string;
             };
             ledgerContract?: string;
+            anchorContract?: string;
             policyContract?: string;
+            /** @description O grant do INVENTÁRIO. Mantido no singular para o painel antigo; os dois alvos estão em `targets`. */
             grant?: Record<string, never> | null;
+            /** @description Grant e cota por alvo, indexados por `ledger` e `anchor`. */
+            targets?: {
+                [key: string]: {
+                    contract?: string;
+                    grant?: Record<string, never> | null;
+                    quota?: Record<string, never> | null;
+                };
+            };
             /** @description Lida do contrato. */
             quota?: {
                 maxItems?: number;
@@ -758,6 +896,51 @@ export interface components {
                 remaining?: number;
                 windowResetsAtLedger?: number;
             } | null;
+        };
+        ProvisionResult: {
+            success?: boolean;
+            masterAccount?: string;
+            /** @description `null` quando a conta já existia — repetir não redeploya. */
+            deployHash?: string | null;
+            /** @description Chave que administra a conta (regra Default). */
+            owner?: string;
+            signer?: {
+                publicKeyHex?: string;
+                verifier?: string;
+            };
+            granted?: {
+                /** @enum {string} */
+                target?: "ledger" | "anchor";
+                contextRuleId?: number | null;
+                hash?: string;
+            }[];
+        };
+        AnchorResult: {
+            success?: boolean;
+            /** @description Transação Stellar que gravou o registro. */
+            hash?: string;
+            contract?: string;
+            /** @description sha256 COMPLETO (64 hex) do payload gravado. É o que o contrato guarda em `BytesN<32>` e o que `verify` confere. */
+            payloadHash?: string;
+            /** Format: uuid */
+            entryId?: string;
+        };
+        Anchor: {
+            /** Format: uuid */
+            id?: string;
+            reference?: string;
+            payload?: Record<string, never>;
+            payloadHash?: string;
+            /** @enum {string} */
+            state?: "pending" | "confirmed" | "failed";
+            txHash?: string | null;
+            error?: string | null;
+            /** Format: date-time */
+            createdAt?: string;
+        };
+        AnchorPage: {
+            success?: boolean;
+            items?: components["schemas"]["Anchor"][];
         };
         LedgerRecord: {
             /** @description Chave gerada fora da chain. */
@@ -1031,6 +1214,98 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Falha. `errorCode` é estável e serve para o cliente decidir. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    authnPassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: email */
+                    email: string;
+                    password: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Sessão aberta; o cookie httpOnly vai no Set-Cookie. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        success?: boolean;
+                        contractId?: string;
+                        custodial?: boolean;
+                    };
+                };
+            };
+            /** @description Falha. `errorCode` é estável e serve para o cliente decidir. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Falha. `errorCode` é estável e serve para o cliente decidir. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Falha. `errorCode` é estável e serve para o cliente decidir. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    authnSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A conta desta sessão. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        success?: boolean;
+                        contractId?: string;
+                        custodial?: boolean;
+                    };
                 };
             };
             /** @description Falha. `errorCode` é estável e serve para o cliente decidir. */
@@ -1713,6 +1988,64 @@ export interface operations {
             };
         };
     };
+    provisionMaster: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description Teto de itens do inventário.
+                     * @default 10000
+                     */
+                    ledgerMaxItems?: number;
+                    /**
+                     * @description Teto de eventos ancorados.
+                     * @default 50000
+                     */
+                    anchorMaxItems?: number;
+                    /**
+                     * @description Janela deslizante. Default: 30 dias.
+                     * @default 518400
+                     */
+                    periodLedgers?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Provisionada. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProvisionResult"];
+                };
+            };
+            /** @description Falha. `errorCode` é estável e serve para o cliente decidir. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Falha. `errorCode` é estável e serve para o cliente decidir. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     registerMasterGrant: {
         parameters: {
             query?: never;
@@ -1728,6 +2061,12 @@ export interface operations {
                     maxItems: number;
                     periodLedgers: number;
                     grantTxHash?: string;
+                    /**
+                     * @description Qual contrato a regra autoriza: `ledger` é o inventário de itens, `anchor` é o histórico contábil. Cada um tem cota própria — reconceder um não mexe no outro.
+                     * @default ledger
+                     * @enum {string}
+                     */
+                    target?: "ledger" | "anchor";
                 };
             };
         };
@@ -1772,7 +2111,10 @@ export interface operations {
     };
     revokeMasterGrant: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Qual grant revogar. Omitido, o do inventário. */
+                target?: "ledger" | "anchor";
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -1933,6 +2275,127 @@ export interface operations {
             };
             /** @description Falha. `errorCode` é estável e serve para o cliente decidir. */
             502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    recordAnchor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Tenant do sistema consumidor. Vai gravado no registro. */
+                    tenantId: string;
+                    /**
+                     * @description Tipo do evento. Vira `Symbol` on-chain, daí o alfabeto restrito.
+                     * @example credit_purchase
+                     * @example refund
+                     * @example marketplace_transfer
+                     */
+                    kind: string;
+                    /** @description Chave de negócio (transactionId / orderId / listingId) — é por ela que se acha o registro do outro lado. */
+                    reference?: string;
+                    /** @description O evento completo. Fica off-chain; só o hash sobe. */
+                    payload?: Record<string, never> | string;
+                    /** @description Inteiro na MENOR unidade (centavos). `i128` não aceita fracionário — `19.90` é recusado, `1990` não. Default: 1. */
+                    amount?: string | number;
+                };
+            };
+        };
+        responses: {
+            /** @description Ancorado. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnchorResult"];
+                };
+            };
+            /** @description Falha. `errorCode` é estável e serve para o cliente decidir. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Falha. `errorCode` é estável e serve para o cliente decidir. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description `QUOTA_EXCEEDED`: a cota de âncoras acabou. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description `NO_GRANT`: o tenant não concedeu o grant de âncora. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Falha. `errorCode` é estável e serve para o cliente decidir. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listAnchors: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+                /** @description Filtra pelo tipo do evento. */
+                kind?: string;
+                /** @description Filtra pela chave de negócio. */
+                reference?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Âncoras, da mais recente para a mais antiga. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnchorPage"];
+                };
+            };
+            /** @description Falha. `errorCode` é estável e serve para o cliente decidir. */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -35,7 +35,14 @@ export const openapi = {
     version,
     license: { name: 'MIT', identifier: 'MIT' },
     description: [
-      'Smart accounts na Stellar com login por passkey e taxas patrocinadas.',
+      'Smart accounts na Stellar com taxas patrocinadas.\n\n' +
+      'Dois modelos de custódia, e a escolha é de quem integra:\n\n' +
+      '· **Custodial** (`POST /v1/master/provision`) — a plataforma provisiona a ' +
+      'conta e as permissões com chaves derivadas. O tenant faz login no portal e ' +
+      'já encontra tudo pronto: não registra digital, não guarda seed, não assina ' +
+      'nada. É o caminho para quem quer a chain invisível.\n\n' +
+      '· **Auto-custódia** (painel + passkey) — o dono cria a conta com passkey e ' +
+      'concede as permissões ele mesmo. Ninguém além dele assina.',
       '',
       '## Autenticação',
       '',
@@ -281,6 +288,91 @@ export const openapi = {
         responses: {
           200: { description: 'Sessão aberta; o cookie vem no `Set-Cookie`.', content: { 'application/json': { schema: { $ref: '#/components/schemas/AuthnVerified' } } } },
           400: ERROR_RESPONSE,
+          401: ERROR_RESPONSE,
+        },
+      },
+    },
+    '/v1/authn/password': {
+      post: {
+        operationId: 'authnPassword',
+        tags: ['authn'],
+        summary: 'Sessão do painel por e-mail e senha',
+        description: [
+          'Para a conta mestre **custodial**, que não tem passkey registrada — ela',
+          'é provisionada pelo serviço com chave derivada, e sem este caminho o dono',
+          'não conseguiria abrir o próprio painel.',
+          '',
+          'Prova quem é o humano, não quem controla a chave. A sessão dá leitura e',
+          'as operações que o SERVIÇO executa em nome da conta; assinar no browser',
+          'continua exigindo passkey, e no modelo custodial ninguém assina no browser.',
+          '',
+          'E-mail inexistente e senha errada devolvem a mesma coisa, de propósito.',
+        ].join('\n'),
+        security: [],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['email', 'password'],
+                properties: {
+                  email: { type: 'string', format: 'email' },
+                  password: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: 'Sessão aberta; o cookie httpOnly vai no Set-Cookie.',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean' },
+                    contractId: { type: 'string' },
+                    custodial: { type: 'boolean' },
+                  },
+                },
+              },
+            },
+          },
+          400: ERROR_RESPONSE,
+          401: ERROR_RESPONSE,
+          429: ERROR_RESPONSE,
+        },
+      },
+    },
+    '/v1/authn/session': {
+      get: {
+        operationId: 'authnSession',
+        tags: ['authn'],
+        summary: 'Quem está logado nesta sessão',
+        description:
+          'O painel usa para sobreviver a um reload. Com passkey a conta vem do ' +
+          'IndexedDB do kit; numa sessão custodial o browser não guarda nada, e o ' +
+          'cookie httpOnly não é legível por JS. `custodial` é derivado da ausência ' +
+          'de passkey na conta.',
+        security: [{ sessionCookie: [] }],
+        responses: {
+          200: {
+            description: 'A conta desta sessão.',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean' },
+                    contractId: { type: 'string' },
+                    custodial: { type: 'boolean' },
+                  },
+                },
+              },
+            },
+          },
           401: ERROR_RESPONSE,
         },
       },
@@ -606,6 +698,50 @@ export const openapi = {
         },
       },
     },
+    '/v1/master/provision': {
+      post: {
+        operationId: 'provisionMaster',
+        tags: ['master'],
+        summary: 'Provisiona a conta mestre do tenant, sem passkey',
+        description: [
+          'O caminho do produto: o tenant faz login social e já encontra a conta',
+          'pronta. Não registra digital, não guarda seed, não assina nada.',
+          '',
+          'Três transações patrocinadas: deploy da smart account com a chave de',
+          'OWNER na regra `Default`, depois uma regra `CallContract` por alvo com a',
+          'chave do SERVIÇO e a cota instalada.',
+          '',
+          'Duas chaves porque a cota precisa ser fronteira de verdade: a chave que',
+          'minta todo dia não está na `Default`, então não consegue alterar a regra',
+          'que a limita, adicionar signer nem mover fundos.',
+          '',
+          '**Idempotente.** O endereço é derivado do app, então repetir encontra a',
+          'conta existente e completa só o que falta — útil quando a segunda regra',
+          'falhou e a primeira não.',
+        ].join('\n'),
+        security: PANEL_OR_SERVICE,
+        requestBody: {
+          required: false,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  ledgerMaxItems: { type: 'integer', default: 10000, description: 'Teto de itens do inventário.' },
+                  anchorMaxItems: { type: 'integer', default: 50000, description: 'Teto de eventos ancorados.' },
+                  periodLedgers: { type: 'integer', default: 518400, description: 'Janela deslizante. Default: 30 dias.' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: 'Provisionada.', content: { 'application/json': { schema: { $ref: '#/components/schemas/ProvisionResult' } } } },
+          401: ERROR_RESPONSE,
+          502: ERROR_RESPONSE,
+        },
+      },
+    },
     '/v1/master/grant': {
       post: {
         operationId: 'registerMasterGrant',
@@ -627,6 +763,15 @@ export const openapi = {
                   maxItems: { type: 'integer', description: 'Itens autorizados na janela.' },
                   periodLedgers: { type: 'integer' },
                   grantTxHash: { type: 'string' },
+                  target: {
+                    type: 'string',
+                    enum: ['ledger', 'anchor'],
+                    default: 'ledger',
+                    description:
+                      'Qual contrato a regra autoriza: `ledger` é o inventário de ' +
+                      'itens, `anchor` é o histórico contábil. Cada um tem cota ' +
+                      'própria — reconceder um não mexe no outro.',
+                  },
                 },
               },
             },
@@ -644,6 +789,14 @@ export const openapi = {
         tags: ['master'],
         summary: 'Revoga a permissão do serviço',
         security: PANEL_OR_SERVICE,
+        parameters: [
+          {
+            name: 'target',
+            in: 'query',
+            schema: { type: 'string', enum: ['ledger', 'anchor'], default: 'ledger' },
+            description: 'Qual grant revogar. Omitido, o do inventário.',
+          },
+        ],
         responses: { 200: { description: 'Revogada.', content: { 'application/json': { schema: { $ref: '#/components/schemas/Ok' } } } }, 401: ERROR_RESPONSE },
       },
     },
@@ -736,6 +889,95 @@ export const openapi = {
               'não a conta mestre. Ou `NO_GRANT`.',
           },
           502: ERROR_RESPONSE,
+        },
+      },
+    },
+    '/v1/ledger/record': {
+      post: {
+        operationId: 'recordAnchor',
+        tags: ['ledger'],
+        summary: 'Ancora um evento de negócio',
+        description: [
+          'Para o que **não** é item: compra de crédito, dedução, reembolso, split,',
+          'cancelamento. Não tem dono, não entra no inventário e não gasta a cota de',
+          'mint — o alvo é o contrato de âncora, com grant próprio.',
+          '',
+          'On-chain vai o indispensável (tenant, tipo, referência, valor e o sha256',
+          'do payload). O JSON inteiro fica off-chain e o hash amarra os dois: dá',
+          'para provar depois que o registro guardado não foi editado.',
+          '',
+          '**Não deduplica.** Dois `credit_lock` da mesma transação são dois eventos,',
+          'e recusar o segundo apagaria histórico real. Quem deduplica é o consumidor,',
+          'que tem o contexto.',
+        ].join('\n'),
+        security: SERVICE_ONLY,
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['tenantId', 'kind'],
+                properties: {
+                  tenantId: {
+                    type: 'string',
+                    maxLength: 64,
+                    description: 'Tenant do sistema consumidor. Vai gravado no registro.',
+                  },
+                  kind: {
+                    type: 'string',
+                    pattern: '^[a-zA-Z0-9_]{1,32}$',
+                    description:
+                      'Tipo do evento. Vira `Symbol` on-chain, daí o alfabeto restrito.',
+                    examples: ['credit_purchase', 'refund', 'marketplace_transfer'],
+                  },
+                  reference: {
+                    type: 'string',
+                    maxLength: 128,
+                    description:
+                      'Chave de negócio (transactionId / orderId / listingId) — é por ' +
+                      'ela que se acha o registro do outro lado.',
+                  },
+                  payload: {
+                    oneOf: [{ type: 'object' }, { type: 'string' }],
+                    description: 'O evento completo. Fica off-chain; só o hash sobe.',
+                  },
+                  amount: {
+                    type: ['string', 'integer'],
+                    description:
+                      'Inteiro na MENOR unidade (centavos). `i128` não aceita ' +
+                      'fracionário — `19.90` é recusado, `1990` não. Default: 1.',
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: 'Ancorado.', content: { 'application/json': { schema: { $ref: '#/components/schemas/AnchorResult' } } } },
+          400: ERROR_RESPONSE,
+          401: ERROR_RESPONSE,
+          403: { ...ERROR_RESPONSE, description: '`QUOTA_EXCEEDED`: a cota de âncoras acabou.' },
+          409: { ...ERROR_RESPONSE, description: '`NO_GRANT`: o tenant não concedeu o grant de âncora.' },
+          502: ERROR_RESPONSE,
+        },
+      },
+    },
+    '/v1/ledger/records': {
+      get: {
+        operationId: 'listAnchors',
+        tags: ['ledger'],
+        summary: 'Histórico de âncoras, com o payload completo',
+        security: PANEL_OR_SERVICE,
+        parameters: [
+          { name: 'limit', in: 'query', schema: { type: 'integer', default: 25, maximum: 100 } },
+          { name: 'offset', in: 'query', schema: { type: 'integer', default: 0 } },
+          { name: 'kind', in: 'query', schema: { type: 'string' }, description: 'Filtra pelo tipo do evento.' },
+          { name: 'reference', in: 'query', schema: { type: 'string' }, description: 'Filtra pela chave de negócio.' },
+        ],
+        responses: {
+          200: { description: 'Âncoras, da mais recente para a mais antiga.', content: { 'application/json': { schema: { $ref: '#/components/schemas/AnchorPage' } } } },
+          401: ERROR_RESPONSE,
         },
       },
     },
@@ -1201,8 +1443,24 @@ export const openapi = {
             properties: { publicKeyHex: { type: 'string' }, verifier: { type: 'string' } },
           },
           ledgerContract: { type: 'string' },
+          anchorContract: { type: 'string' },
           policyContract: { type: 'string' },
-          grant: { type: ['object', 'null'] },
+          grant: {
+            type: ['object', 'null'],
+            description: 'O grant do INVENTÁRIO. Mantido no singular para o painel antigo; os dois alvos estão em `targets`.',
+          },
+          targets: {
+            type: 'object',
+            description: 'Grant e cota por alvo, indexados por `ledger` e `anchor`.',
+            additionalProperties: {
+              type: 'object',
+              properties: {
+                contract: { type: 'string' },
+                grant: { type: ['object', 'null'] },
+                quota: { type: ['object', 'null'] },
+              },
+            },
+          },
           quota: {
             type: ['object', 'null'],
             description: 'Lida do contrato.',
@@ -1213,6 +1471,68 @@ export const openapi = {
               windowResetsAtLedger: { type: 'integer' },
             },
           },
+        },
+      },
+      ProvisionResult: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean' },
+          masterAccount: { type: 'string' },
+          deployHash: {
+            type: ['string', 'null'],
+            description: '`null` quando a conta já existia — repetir não redeploya.',
+          },
+          owner: { type: 'string', description: 'Chave que administra a conta (regra Default).' },
+          signer: {
+            type: 'object',
+            properties: { publicKeyHex: { type: 'string' }, verifier: { type: 'string' } },
+          },
+          granted: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                target: { type: 'string', enum: ['ledger', 'anchor'] },
+                contextRuleId: { type: ['integer', 'null'] },
+                hash: { type: 'string' },
+              },
+            },
+          },
+        },
+      },
+      AnchorResult: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean' },
+          hash: { type: 'string', description: 'Transação Stellar que gravou o registro.' },
+          contract: { type: 'string' },
+          payloadHash: {
+            type: 'string',
+            description:
+              'sha256 COMPLETO (64 hex) do payload gravado. É o que o contrato guarda ' +
+              'em `BytesN<32>` e o que `verify` confere.',
+          },
+          entryId: { type: 'string', format: 'uuid' },
+        },
+      },
+      Anchor: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+          reference: { type: 'string' },
+          payload: { type: 'object' },
+          payloadHash: { type: 'string' },
+          state: { type: 'string', enum: ['pending', 'confirmed', 'failed'] },
+          txHash: { type: ['string', 'null'] },
+          error: { type: ['string', 'null'] },
+          createdAt: { type: 'string', format: 'date-time' },
+        },
+      },
+      AnchorPage: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean' },
+          items: { type: 'array', items: { $ref: '#/components/schemas/Anchor' } },
         },
       },
       LedgerRecord: {
