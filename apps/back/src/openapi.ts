@@ -133,6 +133,9 @@ export const openapi = {
           'Aceita `{func, auth}` (o proxy monta e paga) ou `{xdr}` (envelopa em',
           'fee-bump). Antes de pagar aplica allowlist de alvos, teto por',
           'transação e reserva atômica da quota diária.',
+          '',
+          'Desligado com `RELAY_ENABLED=false` (padrão fora de development): a rota',
+          'responde 404.',
         ].join('\n'),
         security: [],
         parameters: [
@@ -428,7 +431,18 @@ export const openapi = {
           200: { description: 'Registrada.', content: { 'application/json': { schema: { $ref: '#/components/schemas/RegisteredAccount' } } } },
           400: ERROR_RESPONSE,
           401: ERROR_RESPONSE,
-          409: { ...ERROR_RESPONSE, description: '`ACCOUNT_NOT_DEPLOYED`: a conta ainda não existe on-chain.' },
+          403: {
+            ...ERROR_RESPONSE,
+            description:
+              '`FORBIDDEN`: registro com publishable key desligado (`ACCOUNT_SELF_REGISTRATION`).',
+          },
+          409: {
+            ...ERROR_RESPONSE,
+            description:
+              '`ACCOUNT_NOT_DEPLOYED`: a conta ainda não existe on-chain. `ACCOUNT_EXISTS`: com ' +
+              'publishable key só se registra conta nova — credencial em conta existente, só ' +
+              'com secret key.',
+          },
           429: ERROR_RESPONSE,
         },
       },
@@ -671,6 +685,7 @@ export const openapi = {
             content: { 'application/json': { schema: { $ref: '#/components/schemas/MasterState' } } },
           },
           401: ERROR_RESPONSE,
+          403: { ...ERROR_RESPONSE, description: '`FORBIDDEN`: sessão que não é da própria conta mestre.' },
         },
       },
       post: {
@@ -694,6 +709,12 @@ export const openapi = {
           200: { description: 'Definida.', content: { 'application/json': { schema: { $ref: '#/components/schemas/MasterAccountSet' } } } },
           400: ERROR_RESPONSE,
           401: ERROR_RESPONSE,
+          403: {
+            ...ERROR_RESPONSE,
+            description:
+              '`FORBIDDEN`: com mestre já definida, só a secret key ou a sessão da própria ' +
+              'mestre a trocam; sem mestre, sessão só com `PANEL_MASTER_ADMIN`.',
+          },
           404: ERROR_RESPONSE,
         },
       },
@@ -715,9 +736,16 @@ export const openapi = {
           'minta todo dia não está na `Default`, então não consegue alterar a regra',
           'que a limita, adicionar signer nem mover fundos.',
           '',
-          '**Idempotente.** O endereço é derivado do app, então repetir encontra a',
-          'conta existente e completa só o que falta — útil quando a segunda regra',
-          'falhou e a primeira não.',
+          '**Idempotente.** O deployer é fixo (o primeiro channel configurado) e a',
+          'mestre já existente é reaproveitada; regra que já existe on-chain não é',
+          'recriada. Repetir completa só o que falta — útil quando a segunda regra',
+          'falhou e a primeira não. Chamadas simultâneas do mesmo app recebem 409',
+          '`PROVISION_IN_PROGRESS`.',
+          '',
+          'No fim, a mestre entra na allowlist dos dois ledgers (`set_minter` no',
+          'inventário, `set_writer` na âncora), assinada pelo registrar do serviço.',
+          '',
+          'Sem mestre ainda, só a secret key provisiona.',
         ].join('\n'),
         security: PANEL_OR_SERVICE,
         requestBody: {
@@ -738,7 +766,10 @@ export const openapi = {
         responses: {
           200: { description: 'Provisionada.', content: { 'application/json': { schema: { $ref: '#/components/schemas/ProvisionResult' } } } },
           401: ERROR_RESPONSE,
+          403: ERROR_RESPONSE,
+          409: { ...ERROR_RESPONSE, description: '`PROVISION_IN_PROGRESS` ou `NOT_CONFIGURED`.' },
           502: ERROR_RESPONSE,
+          503: { ...ERROR_RESPONSE, description: '`FEE_CAP`, `NO_CHANNEL_AVAILABLE` ou `CONTRACT_BUSY` (fila de escrita do contrato cheia — ~1 escrita por ledger): temporário.' },
         },
       },
     },
@@ -781,6 +812,7 @@ export const openapi = {
           200: { description: 'Registrada.', content: { 'application/json': { schema: { $ref: '#/components/schemas/CreatedGrant' } } } },
           400: ERROR_RESPONSE,
           401: ERROR_RESPONSE,
+          403: ERROR_RESPONSE,
           409: ERROR_RESPONSE,
         },
       },
@@ -797,7 +829,7 @@ export const openapi = {
             description: 'Qual grant revogar. Omitido, o do inventário.',
           },
         ],
-        responses: { 200: { description: 'Revogada.', content: { 'application/json': { schema: { $ref: '#/components/schemas/Ok' } } } }, 401: ERROR_RESPONSE },
+        responses: { 200: { description: 'Revogada.', content: { 'application/json': { schema: { $ref: '#/components/schemas/Ok' } } } }, 401: ERROR_RESPONSE, 403: ERROR_RESPONSE },
       },
     },
 
@@ -808,12 +840,17 @@ export const openapi = {
         tags: ['ledger'],
         summary: 'Minta um lote como a conta mestre',
         description: [
-          'Até 100 UUIDs por chamada — não é escolha de desenho, é o limite de',
-          'recursos de uma transação Soroban. Um inventário de 10.000 sai em ~100',
-          'chamadas.',
+          'Até 10 UUIDs por chamada — é o limite de escritas de uma transação',
+          'Soroban: cada item grava 3 entradas no contrato.',
           '',
-          'A cota concedida pelo tenant conta ITENS: um lote de 100 desconta 100, e',
+          'A cota concedida pelo tenant conta ITENS: um lote de 10 desconta 10, e',
           'um lote maior que o teto é recusado inteiro.',
+          '',
+          '**Idempotente por UUID.** Repetir um lote já mintado devolve 200 com',
+          '`alreadyMinted: true` e o hash original, sem nova transação. Um UUID cuja',
+          'tentativa anterior falhou (ou travou) é conferido na chain: se o item já',
+          'é da mestre, a linha é confirmada; se não existe, a tentativa é refeita',
+          'reaproveitando a linha.',
         ].join('\n'),
         security: SERVICE_ONLY,
         requestBody: {
@@ -827,7 +864,7 @@ export const openapi = {
                   uuids: {
                     type: 'array',
                     minItems: 1,
-                    maxItems: 100,
+                    maxItems: 10,
                     items: { type: 'string' },
                     description: 'A mesma chave que o banco do sistema consumidor guarda.',
                   },
@@ -847,12 +884,18 @@ export const openapi = {
           },
         },
         responses: {
-          200: { description: 'Lote mintado.', content: { 'application/json': { schema: { $ref: '#/components/schemas/MintResult' } } } },
+          200: { description: 'Lote mintado, ou já mintado antes (`alreadyMinted`).', content: { 'application/json': { schema: { $ref: '#/components/schemas/MintResult' } } } },
           400: ERROR_RESPONSE,
           401: ERROR_RESPONSE,
           403: { ...ERROR_RESPONSE, description: '`QUOTA_EXCEEDED`: a cota concedida acabou.' },
-          409: { ...ERROR_RESPONSE, description: '`NO_GRANT` ou `UUID_TAKEN`.' },
+          409: {
+            ...ERROR_RESPONSE,
+            description:
+              '`NO_GRANT`; `UUID_TAKEN` (parte do lote já existe, ou o item é de outro dono); ' +
+              '`UUID_PENDING` (tentativa anterior ainda em voo — repita em instantes).',
+          },
           502: ERROR_RESPONSE,
+          503: { ...ERROR_RESPONSE, description: '`FEE_CAP`, `NO_CHANNEL_AVAILABLE` ou `CONTRACT_BUSY` (fila de escrita do contrato cheia — ~1 escrita por ledger): temporário.' },
         },
       },
     },
@@ -889,6 +932,7 @@ export const openapi = {
               'não a conta mestre. Ou `NO_GRANT`.',
           },
           502: ERROR_RESPONSE,
+          503: { ...ERROR_RESPONSE, description: '`FEE_CAP`, `NO_CHANNEL_AVAILABLE` ou `CONTRACT_BUSY` (fila de escrita do contrato cheia — ~1 escrita por ledger): temporário.' },
         },
       },
     },
@@ -960,6 +1004,7 @@ export const openapi = {
           403: { ...ERROR_RESPONSE, description: '`QUOTA_EXCEEDED`: a cota de âncoras acabou.' },
           409: { ...ERROR_RESPONSE, description: '`NO_GRANT`: o tenant não concedeu o grant de âncora.' },
           502: ERROR_RESPONSE,
+          503: { ...ERROR_RESPONSE, description: '`FEE_CAP`, `NO_CHANNEL_AVAILABLE` ou `CONTRACT_BUSY` (fila de escrita do contrato cheia — ~1 escrita por ledger): temporário.' },
         },
       },
     },
@@ -1026,7 +1071,25 @@ export const openapi = {
               'application/json': {
                 schema: {
                   type: 'object',
-                  properties: { record: { $ref: '#/components/schemas/LedgerRecord' } },
+                  properties: {
+                    record: {
+                      allOf: [
+                        { $ref: '#/components/schemas/LedgerRecord' },
+                        {
+                          type: 'object',
+                          properties: {
+                            mintTxHash: {
+                              type: ['string', 'null'],
+                              description:
+                                'Transação que mintou, guardada pelo serviço (o contrato não ' +
+                                'guarda). `null` quando o mint foi confirmado só pela leitura ' +
+                                'on-chain.',
+                            },
+                          },
+                        },
+                      ],
+                    },
+                  },
                 },
               },
             },
@@ -1052,6 +1115,7 @@ export const openapi = {
         responses: {
           200: { description: 'Eventos.', content: { 'application/json': { schema: { $ref: '#/components/schemas/LedgerEntryPage' } } } },
           401: ERROR_RESPONSE,
+          403: ERROR_RESPONSE,
         },
       },
     },
@@ -1060,8 +1124,13 @@ export const openapi = {
         operationId: 'listAccountItems',
         tags: ['ledger'],
         summary: 'Itens em posse de uma conta',
+        description: 'Paginado no contrato; a ordem da lista de um dono não é estável.',
         security: [],
-        parameters: [ADDRESS_PARAM],
+        parameters: [
+          ADDRESS_PARAM,
+          { name: 'limit', in: 'query', schema: { type: 'integer', default: 25, maximum: 50 } },
+          { name: 'offset', in: 'query', schema: { type: 'integer', default: 0 } },
+        ],
         responses: {
           200: { description: 'Itens da conta.', content: { 'application/json': { schema: { $ref: '#/components/schemas/LedgerPage' } } } },
           409: ERROR_RESPONSE,
@@ -1300,9 +1369,18 @@ export const openapi = {
         type: 'object',
         properties: {
           success: { type: 'boolean' },
-          minted: { type: 'integer' },
+          minted: { type: 'integer', description: '0 quando `alreadyMinted`.' },
           uuids: { type: 'array', items: { type: 'string' } },
-          hash: { type: 'string' },
+          hash: {
+            type: ['string', 'null'],
+            description: '`null` só em `alreadyMinted`, quando o lote saiu em mais de uma transação ou o hash se perdeu.',
+          },
+          alreadyMinted: { type: 'boolean', description: 'O lote inteiro já estava mintado; nada foi submetido.' },
+          hashes: {
+            type: 'object',
+            additionalProperties: { type: ['string', 'null'] },
+            description: 'Em `alreadyMinted`: hash do mint de cada UUID.',
+          },
         },
       },
       TransferResult: {
@@ -1494,7 +1572,23 @@ export const openapi = {
               properties: {
                 target: { type: 'string', enum: ['ledger', 'anchor'] },
                 contextRuleId: { type: ['integer', 'null'] },
-                hash: { type: 'string' },
+                hash: {
+                  type: ['string', 'null'],
+                  description: '`null` quando a regra já existia on-chain e foi reaproveitada.',
+                },
+              },
+            },
+          },
+          roles: {
+            type: 'array',
+            description: 'A mestre na allowlist de cada ledger.',
+            items: {
+              type: 'object',
+              properties: {
+                contract: { type: 'string' },
+                role: { type: 'string', enum: ['minter', 'writer'] },
+                changed: { type: 'boolean', description: '`false` quando já estava habilitada.' },
+                hash: { type: ['string', 'null'] },
               },
             },
           },

@@ -3,11 +3,12 @@ extern crate std;
 
 use soroban_sdk::{
     auth::{Context, ContractContext},
-    testutils::{Address as _, Ledger as _},
+    testutils::{storage::Persistent as _, Address as _, Ledger as _},
     Address, Env, IntoVal, String, Symbol, Vec,
 };
 use stellar_accounts::smart_account::{ContextRule, ContextRuleType};
 
+use crate::contract::{Consumption, DataKey};
 use crate::{MintQuotaParams, MintQuotaPolicyContract, MintQuotaPolicyContractClient};
 
 const RULE_ID: u32 = 1;
@@ -291,4 +292,83 @@ fn batch_bigger_than_the_cap_is_rejected_whole() {
         &rule(&f.e, &f.target),
         &f.account,
     );
+}
+
+// --- histórico em buckets e TTL ------------------------------------------
+
+/// Simula `calls` chamadas de 1 unidade, uma por ledger.
+fn spread_calls(f: &Fixture, from_ledger: u32, calls: u32) {
+    for n in 0..calls {
+        f.e.ledger().with_mut(|l| l.sequence_number = from_ledger + n);
+        enforce(f);
+    }
+}
+
+#[test]
+fn two_thousand_calls_in_one_window_pass_when_the_cap_allows() {
+    // Era o teto escondido: com uma linha por chamada, a 501ª era recusada
+    // mesmo com max_items de 10.000.
+    let f = setup(10_000, 518_400);
+    f.e.cost_estimate().budget().reset_unlimited();
+    spread_calls(&f, 100_000, 2_000);
+
+    let data = f.client.get_quota_data(&RULE_ID, &f.account);
+    assert_eq!(data.used, 2_000);
+    let history: Vec<Consumption> = f.e.as_contract(&f.client.address, || {
+        f.e.storage()
+            .persistent()
+            .get(&DataKey::History(f.account.clone(), RULE_ID))
+            .unwrap()
+    });
+    assert!(history.len() <= 65, "histórico cresceu para {} linhas", history.len());
+}
+
+#[test]
+fn exactly_the_cap_passes_and_one_more_is_refused() {
+    let f = setup(700, 10_000);
+    f.e.cost_estimate().budget().reset_unlimited();
+    spread_calls(&f, 50_000, 700);
+    assert_eq!(f.client.get_quota_data(&RULE_ID, &f.account).used, 700);
+    let over = f.client.try_enforce(
+        &mint_context(&f.e, &f.target),
+        &Vec::new(&f.e),
+        &rule(&f.e, &f.target),
+        &f.account,
+    );
+    assert!(over.is_err());
+}
+
+#[test]
+fn a_bucket_leaves_the_window_only_after_it_fully_expires() {
+    // period 6.400 → fatias de 100 ledgers.
+    let f = setup(1, 6_400);
+    f.e.ledger().with_mut(|l| l.sequence_number = 10_050);
+    enforce(&f);
+
+    // A fatia começa em 10.000 e cobre até 10.099: sai em 10.000 + 100 + 6.400.
+    f.e.ledger().with_mut(|l| l.sequence_number = 16_499);
+    assert_eq!(f.client.get_quota_data(&RULE_ID, &f.account).used, 1);
+    assert_eq!(f.client.get_quota_data(&RULE_ID, &f.account).window_resets_at, 16_500);
+    f.e.ledger().with_mut(|l| l.sequence_number = 16_500);
+    assert_eq!(f.client.get_quota_data(&RULE_ID, &f.account).used, 0);
+    enforce(&f);
+}
+
+#[test]
+fn enforce_renews_the_params_ttl() {
+    let f = setup(10, 1_000);
+    let ttl_of_params = |f: &Fixture| {
+        f.e.as_contract(&f.client.address, || {
+            f.e.storage()
+                .persistent()
+                .get_ttl(&DataKey::Params(f.account.clone(), RULE_ID))
+        })
+    };
+    let installed = ttl_of_params(&f);
+    f.e.ledger().with_mut(|l| l.sequence_number += 2_000_000);
+    enforce(&f);
+    let after = ttl_of_params(&f);
+    // Sem a renovação, o TTL teria caído 2.000.000 ledgers.
+    assert!(after > installed.saturating_sub(2_000_000));
+    assert!(after >= 119 * 17_280, "TTL abaixo do alvo: {after}");
 }

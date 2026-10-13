@@ -48,14 +48,26 @@ export const operator = fromSecretOr('operator', env.TREASURY_OPERATOR_SECRET);
 /** Assina `set_allowance` / `allow_target` — ambos `#[only_owner]`. */
 export const owner = fromSecretOr('owner', env.TREASURY_OWNER_SECRET);
 
-/** Envia XLM de testnet para as smart accounts. */
-export const faucet = fromSecretOr('faucet', env.FAUCET_SECRET);
+/**
+ * Envia XLM de testnet para as smart accounts. `null` quando o faucet está
+ * desligado fora de dev — não existe motivo para a instância de mainnet ter a
+ * chave de uma conta que distribui XLM.
+ */
+export const faucet: Keypair | null =
+  env.FAUCET_SECRET || isDev ? fromSecretOr('faucet', env.FAUCET_SECRET) : null;
+
+/**
+ * Quem mantém a allowlist de minters/writers nos ledgers (`set_minter`,
+ * `set_writer`). É a chave de owner: a mesma que já administra o Treasury, e
+ * que o deploy dos contratos passa como `registrar` no construtor.
+ */
+export const registrar = owner;
 
 export const allKeys: Array<{ role: Role; keypair: Keypair }> = [
   ...channels.map((keypair) => ({ role: 'channel' as const, keypair })),
   { role: 'operator', keypair: operator },
   { role: 'owner', keypair: owner },
-  { role: 'faucet', keypair: faucet },
+  ...(faucet ? [{ role: 'faucet' as const, keypair: faucet }] : []),
 ];
 
 const bySecret = new Map(allKeys.map(({ keypair }) => [keypair.publicKey(), keypair]));

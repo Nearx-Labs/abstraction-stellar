@@ -132,7 +132,7 @@ jobs:
   images:
     name: imagens docker
     runs-on: ubuntu-latest
-    needs: [back, front]
+    needs: [back]
     # `packages: write` é o que autoriza o push no GHCR; `contents: read` volta a
     # ser explícito porque declarar o bloco zera os defaults do repositório.
     permissions:
@@ -183,11 +183,44 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: tags do front
+  # O painel é bundle estático: API, rede e contratos entram no BUILD. Uma
+  # imagem por ambiente, com as variáveis do GitHub Environment de cada um —
+  # antes era uma imagem só, e os painéis de hml e de prod saíam iguais,
+  # apontando para a API de prod. Só em push na main: em PR o job `front` já
+  # valida o build, e os Environments não precisam existir para um PR passar.
+  front-images:
+    name: imagem do painel (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    needs: [front]
+    if: github.event_name != 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [hml, prod]
+    environment: ${{ matrix.target }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+
+      - name: nome da imagem em minúsculas
+        id: repo
+        run: echo "lc=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: login no GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: tags do painel
         id: meta_front
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/${{ steps.repo.outputs.lc }}/front
+          images: ghcr.io/${{ steps.repo.outputs.lc }}/front-${{ matrix.target }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=long
@@ -195,8 +228,23 @@ jobs:
       - uses: docker/build-push-action@v7
         with:
           context: apps/front
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
+          build-args: |
+            VITE_API_URL=${{ vars.VITE_API_URL }}
+            VITE_PUBLISHABLE_KEY=${{ vars.VITE_PUBLISHABLE_KEY }}
+            VITE_RPC_URL=${{ vars.VITE_RPC_URL }}
+            VITE_NETWORK_PASSPHRASE=${{ vars.VITE_NETWORK_PASSPHRASE }}
+            VITE_EXPLORER=${{ vars.VITE_EXPLORER }}
+            VITE_TREASURY=${{ vars.VITE_TREASURY }}
+            VITE_XLM_SAC=${{ vars.VITE_XLM_SAC }}
+            VITE_DEMO_LEDGER=${{ vars.VITE_DEMO_LEDGER }}
+            VITE_MINT_QUOTA_POLICY=${{ vars.VITE_MINT_QUOTA_POLICY }}
+            VITE_ACCOUNT_WASM_HASH=${{ vars.VITE_ACCOUNT_WASM_HASH }}
+            VITE_ED25519_VERIFIER=${{ vars.VITE_ED25519_VERIFIER }}
+            VITE_WEBAUTHN_VERIFIER=${{ vars.VITE_WEBAUTHN_VERIFIER }}
+            VITE_EMAIL_VERIFIER=${{ vars.VITE_EMAIL_VERIFIER }}
+            VITE_SPENDING_LIMIT_POLICY=${{ vars.VITE_SPENDING_LIMIT_POLICY }}
           tags: ${{ steps.meta_front.outputs.tags }}
           labels: ${{ steps.meta_front.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=front-${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=front-${{ matrix.target }}

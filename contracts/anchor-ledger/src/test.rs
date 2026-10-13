@@ -2,19 +2,40 @@
 extern crate std;
 
 use soroban_sdk::{
-    testutils::{Address as _, Ledger as _},
-    Address, BytesN, Env, String, Symbol,
+    testutils::{Address as _, Ledger as _, MockAuth, MockAuthInvoke},
+    Address, BytesN, Env, IntoVal, String, Symbol,
 };
 
 use crate::{AnchorLedger, AnchorLedgerClient, MAX_PAGE, MAX_TENANT_LEN};
 
-fn setup() -> (Env, AnchorLedgerClient<'static>, Address) {
+struct Setup {
+    e: Env,
+    client: AnchorLedgerClient<'static>,
+    admin: Address,
+    registrar: Address,
+}
+
+fn deploy() -> Setup {
     let e = Env::default();
-    e.mock_all_auths();
-    let id = e.register(AnchorLedger, ());
+    let admin = Address::generate(&e);
+    let registrar = Address::generate(&e);
+    let id = e.register(AnchorLedger, (&admin, &registrar));
     let client = AnchorLedgerClient::new(&e, &id);
-    let master = Address::generate(&e);
-    (e, client, master)
+    Setup {
+        e,
+        client,
+        admin,
+        registrar,
+    }
+}
+
+/// Contrato com uma mestre já habilitada e auth mockada — o caso comum.
+fn setup() -> (Env, AnchorLedgerClient<'static>, Address) {
+    let s = deploy();
+    s.e.mock_all_auths();
+    let master = Address::generate(&s.e);
+    s.client.set_writer(&master, &true);
+    (s.e, s.client, master)
 }
 
 fn hash(e: &Env, byte: u8) -> BytesN<32> {
@@ -103,6 +124,7 @@ fn two_tenants_are_isolated() {
 fn writer_records_which_master_signed() {
     let (e, client, master_a) = setup();
     let master_b = Address::generate(&e);
+    client.set_writer(&master_b, &true);
     let kind = Symbol::new(&e, "refund");
 
     client.register(&master_a, &text(&e, "t-a"), &kind, &text(&e, "r-1"), &hash(&e, 1), &1);
@@ -199,9 +221,7 @@ fn boundary_lengths_are_accepted() {
 #[should_panic]
 fn register_requires_caller_auth() {
     // sem mock_all_auths: o require_auth do caller precisa falhar
-    let e = Env::default();
-    let id = e.register(AnchorLedger, ());
-    let client = AnchorLedgerClient::new(&e, &id);
+    let Setup { e, client, .. } = deploy();
 
     client.register(
         &Address::generate(&e),
@@ -260,4 +280,98 @@ fn oversized_reference_is_rejected() {
 fn get_record_missing_panics() {
     let (_e, client, _master) = setup();
     client.get_record(&42);
+}
+
+// --- allowlist, papéis e upgrade ---------------------------------------
+
+#[test]
+#[should_panic(expected = "Error(Contract, #6304)")]
+fn an_account_outside_the_allowlist_cannot_register() {
+    let s = deploy();
+    s.e.mock_all_auths();
+    // Assinar não basta: sem set_writer, qualquer conta poluiria o tenant alheio.
+    s.client.register(
+        &Address::generate(&s.e),
+        &text(&s.e, "11111111-1111-1111-1111-111111111111"),
+        &Symbol::new(&s.e, "credit_purchase"),
+        &text(&s.e, "tx-1"),
+        &hash(&s.e, 1),
+        &1,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #6304)")]
+fn a_revoked_writer_cannot_register() {
+    let (e, client, master) = setup();
+    client.set_writer(&master, &false);
+    client.register(&master, &text(&e, "t"), &Symbol::new(&e, "refund"), &text(&e, "r"), &hash(&e, 1), &1);
+}
+
+#[test]
+fn only_the_registrar_manages_the_allowlist() {
+    let s = deploy();
+    let intruder = Address::generate(&s.e);
+    let denied = s
+        .client
+        .mock_auths(&[MockAuth {
+            address: &intruder,
+            invoke: &MockAuthInvoke {
+                contract: &s.client.address,
+                fn_name: "set_writer",
+                args: (&intruder, true).into_val(&s.e),
+                sub_invokes: &[],
+            },
+        }])
+        .try_set_writer(&intruder, &true);
+    assert!(denied.is_err());
+    assert!(!s.client.is_writer(&intruder));
+
+    let master = Address::generate(&s.e);
+    s.client
+        .mock_auths(&[MockAuth {
+            address: &s.registrar,
+            invoke: &MockAuthInvoke {
+                contract: &s.client.address,
+                fn_name: "set_writer",
+                args: (&master, true).into_val(&s.e),
+                sub_invokes: &[],
+            },
+        }])
+        .set_writer(&master, &true);
+    assert!(s.client.is_writer(&master));
+}
+
+#[test]
+fn only_the_admin_upgrades_or_rotates_roles() {
+    let s = deploy();
+    let hash32 = hash(&s.e, 7);
+    let by_registrar = s
+        .client
+        .mock_auths(&[MockAuth {
+            address: &s.registrar,
+            invoke: &MockAuthInvoke {
+                contract: &s.client.address,
+                fn_name: "upgrade",
+                args: (&hash32,).into_val(&s.e),
+                sub_invokes: &[],
+            },
+        }])
+        .try_upgrade(&hash32);
+    assert!(by_registrar.is_err());
+
+    let next = Address::generate(&s.e);
+    s.client
+        .mock_auths(&[MockAuth {
+            address: &s.admin,
+            invoke: &MockAuthInvoke {
+                contract: &s.client.address,
+                fn_name: "set_registrar",
+                args: (&next,).into_val(&s.e),
+                sub_invokes: &[],
+            },
+        }])
+        .set_registrar(&next);
+    assert_eq!(s.client.registrar(), next);
+    assert_eq!(s.client.admin(), s.admin);
 }

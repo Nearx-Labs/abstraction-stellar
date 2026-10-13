@@ -24,6 +24,7 @@ import { createHmac } from 'node:crypto';
 import { env } from '../env.js';
 import { NETWORK_PASSPHRASE, server } from './rpc.js';
 import { authPayload } from './kitInternals.js';
+import { assertWithinFeeCap } from './feeCap.js';
 
 /** Janela de validade da assinatura, em ledgers (~5 min). */
 const SIGNATURE_TTL_LEDGERS = 60;
@@ -166,6 +167,7 @@ export async function invokeAsMaster(options: {
 
   // 3. Re-simula: a assinatura entrou na transação e mudou o custo.
   const prepared = await server.prepareTransaction(await build(authEntries));
+  assertWithinFeeCap(prepared);
   prepared.sign(options.payer);
 
   const sent = await server.sendTransaction(prepared);

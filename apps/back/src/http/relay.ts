@@ -12,6 +12,7 @@
 // combinação allowlist de alvos + teto por transação + quota diária por conta +
 // allowance on-chain; a key serve para rotear ao app e cortar origem estranha.
 import { Hono } from 'hono';
+import { features } from '../env.js';
 import { resolveByKey } from '../db/queries/apps.js';
 import { relay, type RelayBody } from '../relay/pipeline.js';
 import { clientIp, hit } from './middleware/rateLimit.js';
@@ -21,6 +22,12 @@ const RELAY_LIMIT_PER_MINUTE = 30;
 export const relayRoutes = new Hono();
 
 relayRoutes.post('/relay/:publishableKey', async (c) => {
+  // O relay paga fee até para endereço que não está registrado, e a quota é
+  // por endereço: aberto, é uma torneira de XLM. Quem só opera com secret key
+  // (o MintVRS) não precisa dele.
+  if (!features.relay) {
+    return c.json({ success: false, error: 'rota inexistente', errorCode: 'NOT_FOUND' }, 404);
+  }
   const pk = c.req.param('publishableKey');
 
   const resolved = await resolveByKey(pk, 'publishable');

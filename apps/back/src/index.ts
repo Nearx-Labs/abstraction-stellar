@@ -11,6 +11,7 @@ import { migrate } from './db/migrate.js';
 import { bootstrapApp, bootstrapPanelUser, seedDev } from './db/seed.js';
 import { pool } from './db/pool.js';
 import { allKeys, ensureFundedInDev } from './chain/keys.js';
+import { assertChainConfig } from './chain/preflight.js';
 import { syncChannels } from './db/queries/channels.js';
 import { startTreasuryOutboxWorker } from './workers/treasuryOutbox.js';
 import { startMaintenanceWorker } from './workers/maintenance.js';
@@ -22,6 +23,7 @@ const app = buildApp();
 // A ordem importa: migrar antes de servir, e registrar as contas de serviço
 // antes de qualquer lease.
 await migrate();
+await assertChainConfig();
 await seedDev();
 await bootstrapApp();
 await bootstrapPanelUser();

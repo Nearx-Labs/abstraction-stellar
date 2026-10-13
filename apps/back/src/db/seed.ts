@@ -8,7 +8,7 @@ import { hashKey } from './queries/apps.js';
 import * as accounts from './queries/accounts.js';
 import * as master from './queries/master.js';
 import * as panelCredentials from './queries/panelCredentials.js';
-import { env, isDev } from '../env.js';
+import { env, features, isDev } from '../env.js';
 import { logger } from '../logger.js';
 
 export const DEV_PUBLISHABLE_KEY = 'pk_test_dev';
@@ -47,15 +47,18 @@ export async function seedDev(): Promise<void> {
     );
   }
 
+  // `allow_deploy` segue BOOTSTRAP_ALLOW_DEPLOY (ligado por padrão em dev), igual
+  // ao bootstrapApp — assim dá para ensaiar localmente com a superfície de prod.
   await pool.query(
     `INSERT INTO sponsorship_policies
        (app_id, max_fee_per_tx, max_fee_per_day, target_allowlist, allow_deploy, deploy_fee_cap)
-     VALUES ($1, $2, $3, $4, true, $5)
+     VALUES ($1, $2, $3, $4, $6, $5)
      ON CONFLICT (app_id) DO UPDATE
         SET target_allowlist = EXCLUDED.target_allowlist,
             max_fee_per_tx   = EXCLUDED.max_fee_per_tx,
             max_fee_per_day  = EXCLUDED.max_fee_per_day,
             deploy_fee_cap   = EXCLUDED.deploy_fee_cap,
+            allow_deploy     = EXCLUDED.allow_deploy,
             updated_at       = now()`,
     [
       appId,
@@ -65,6 +68,7 @@ export async function seedDev(): Promise<void> {
       env.ALLOWANCE_MAX_PER_DAY.toString(),
       [env.XLM_SAC_ADDRESS, env.DEMO_LEDGER_CONTRACT_ID, env.ANCHOR_CONTRACT_ID],
       '50000000', // 5 XLM de teto para o deploy
+      features.allowDeploy,
     ],
   );
 
@@ -130,15 +134,21 @@ export async function bootstrapApp(): Promise<void> {
 
   // A allowlist é o que segura o gasto: sem os três alvos aqui, mint e âncora
   // são recusados pelo próprio relay antes de virar transação.
+  // `allow_deploy` vem do ambiente e é reaplicado a cada boot: antes o upsert
+  // gravava `true` e um UPDATE manual para desligar voltava no restart. O
+  // provisionamento não usa o relay (paga com channel próprio), então desligar
+  // não quebra o MintVRS — só fecha o deploy patrocinado para qualquer
+  // portador da publishable key.
   await pool.query(
     `INSERT INTO sponsorship_policies
        (app_id, max_fee_per_tx, max_fee_per_day, target_allowlist, allow_deploy, deploy_fee_cap)
-     VALUES ($1, $2, $3, $4, true, $5)
+     VALUES ($1, $2, $3, $4, $6, $5)
      ON CONFLICT (app_id) DO UPDATE
         SET target_allowlist = EXCLUDED.target_allowlist,
             max_fee_per_tx   = EXCLUDED.max_fee_per_tx,
             max_fee_per_day  = EXCLUDED.max_fee_per_day,
             deploy_fee_cap   = EXCLUDED.deploy_fee_cap,
+            allow_deploy     = EXCLUDED.allow_deploy,
             updated_at       = now()`,
     [
       appId,
@@ -146,6 +156,7 @@ export async function bootstrapApp(): Promise<void> {
       env.ALLOWANCE_MAX_PER_DAY.toString(),
       [env.XLM_SAC_ADDRESS, env.DEMO_LEDGER_CONTRACT_ID, env.ANCHOR_CONTRACT_ID],
       '50000000',
+      features.allowDeploy,
     ],
   );
 

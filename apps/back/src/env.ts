@@ -30,6 +30,20 @@ const csv = z
       .filter(Boolean),
   );
 
+/** Configuração de rede e de contrato sem default aceitável fora de dev. */
+const EXPLICIT_OUTSIDE_DEV = [
+  'RPC_URL',
+  'NETWORK_PASSPHRASE',
+  'PUBLIC_URL',
+  'RP_ID',
+  'DEMO_LEDGER_CONTRACT_ID',
+  'ANCHOR_CONTRACT_ID',
+  'ACCOUNT_WASM_HASH',
+  'ED25519_VERIFIER_ADDRESS',
+  'MINT_QUOTA_POLICY_ADDRESS',
+  'XLM_SAC_ADDRESS',
+] as const;
+
 const schema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -113,6 +127,38 @@ const schema = z
     EMAIL_SESSION_TTL_MINUTES: z.coerce.number().int().positive().default(15),
     ATTESTATION_TTL_SECONDS: z.coerce.number().int().positive().default(300),
 
+    // Superfície exposta. Fora de development, cada uma começa DESLIGADA e o
+    // ambiente liga o que usa: o MintVRS opera só com secret key, e cada uma
+    // destas é uma porta que gasta XLM do sponsor ou mexe em conta alheia.
+    /** Relay patrocinado (`POST /v1/relay/:pk`), o caminho do smart-account-kit. */
+    RELAY_ENABLED: z.string().optional(),
+    /** Faucet de XLM. Nunca liga fora da testnet, qualquer que seja o valor. */
+    FAUCET_ENABLED: z.string().optional(),
+    /** `POST /v1/accounts` com publishable key (registro pelo browser). */
+    ACCOUNT_SELF_REGISTRATION: z.string().optional(),
+    /**
+     * Sessão de painel pode nomear a conta mestre e registrar grant quando o app
+     * ainda não tem mestre (fluxo de auto-custódia com passkey). Com mestre já
+     * definida, só a sessão DA PRÓPRIA mestre mexe nela.
+     */
+    PANEL_MASTER_ADMIN: z.string().optional(),
+    /** Deploy de conta patrocinado pelo relay. */
+    BOOTSTRAP_ALLOW_DEPLOY: z.string().optional(),
+
+    /**
+     * Teto de fee de uma transação assinada pela conta mestre, em stroops. Sem
+     * teto, uma restauração de estado arquivado (ou um bug) sai paga por
+     * qualquer valor que a simulação devolva.
+     */
+    MASTER_MAX_FEE_STROOPS: bigintish(50_000_000n), // 5 XLM
+    /** Quanto as rotas da conta mestre esperam por um channel livre. */
+    CHANNEL_WAIT_MS: z.coerce.number().int().nonnegative().default(20_000),
+    /**
+     * Quanto uma escrita espera a vez no contrato (uma por vez, ver
+     * db/queries/contractLock.ts). ~5s por escrita: 50s comportam ~10 na fila.
+     */
+    CONTRACT_LOCK_WAIT_MS: z.coerce.number().int().nonnegative().default(50_000),
+
     // Encaminhamento opcional pro OpenZeppelin Channels
     CHANNELS_URL: z.string().url().optional(),
     CHANNELS_API_KEY: z.string().optional(),
@@ -139,11 +185,26 @@ const schema = z
       ['CHANNEL_SECRETS', v.CHANNEL_SECRETS.length > 0 ? v.CHANNEL_SECRETS : undefined],
       ['TREASURY_OPERATOR_SECRET', v.TREASURY_OPERATOR_SECRET],
       ['TREASURY_OWNER_SECRET', v.TREASURY_OWNER_SECRET],
-      ['FAUCET_SECRET', v.FAUCET_SECRET],
       ['TREASURY_CONTRACT_ID', v.TREASURY_CONTRACT_ID],
       ['ISSUER_SEED_HEX', v.ISSUER_SEED_HEX],
       ['RP_ORIGINS', v.RP_ORIGINS.length > 0 ? v.RP_ORIGINS : undefined],
     ];
+    if (truthy(v.FAUCET_ENABLED) && !v.FAUCET_SECRET) {
+      required.push(['FAUCET_SECRET', undefined]);
+    }
+    // Os defaults de rede e de contrato são os deploys de TESTNET deste repo.
+    // Em development servem; fora dele, um default silencioso foi como dois
+    // ambientes acabaram gravando nos mesmos contratos — e seria como uma
+    // instância de mainnet subiria apontando para endereços que não existem lá.
+    for (const key of EXPLICIT_OUTSIDE_DEV) {
+      if (!process.env[key]?.trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [key],
+          message: `${key} precisa ser explícito fora de NODE_ENV=development (o default é de testnet)`,
+        });
+      }
+    }
     if (v.MASTER_SIGNER_SEED === 'abstraction-dev-master-seed') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -175,6 +236,10 @@ const schema = z
 
 export type Env = z.infer<typeof schema>;
 
+function truthy(value: string | undefined): boolean {
+  return value === 'true' || value === '1';
+}
+
 function load(): Env {
   const parsed = schema.safeParse(process.env);
   if (!parsed.success) {
@@ -186,3 +251,20 @@ function load(): Env {
 
 export const env = load();
 export const isDev = env.NODE_ENV === 'development';
+
+export const TESTNET_PASSPHRASE = 'Test SDF Network ; September 2015';
+export const isTestnet = env.NETWORK_PASSPHRASE === TESTNET_PASSPHRASE;
+
+/** Flag de superfície: explícita no env, ou ligada por padrão só em development. */
+function flag(value: string | undefined): boolean {
+  return value === undefined ? isDev : truthy(value);
+}
+
+export const features = {
+  relay: flag(env.RELAY_ENABLED),
+  /** Testnet sempre exigida: faucet na mainnet distribui XLM de verdade. */
+  faucet: flag(env.FAUCET_ENABLED) && isTestnet,
+  accountSelfRegistration: flag(env.ACCOUNT_SELF_REGISTRATION),
+  panelMasterAdmin: flag(env.PANEL_MASTER_ADMIN),
+  allowDeploy: flag(env.BOOTSTRAP_ALLOW_DEPLOY),
+} as const;

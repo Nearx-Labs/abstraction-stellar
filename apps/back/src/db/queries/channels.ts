@@ -57,8 +57,18 @@ export async function syncChannels(
   );
 }
 
-/** Toma um channel livre. Lança `NoChannelAvailableError` se todos estão ocupados. */
-export async function acquire(role: Role = 'channel'): Promise<Lease> {
+export interface AcquireOptions {
+  /** Quanto esperar por um channel livre antes de desistir. 0 = não espera. */
+  waitMs?: number;
+  /** Duração do lease. Provisionar são três transações, e 90s não bastam. */
+  leaseSeconds?: number;
+  /** Exige um channel específico (o deployer fixo do provisionamento). */
+  publicKey?: string;
+}
+
+const POLL_MS = 250;
+
+async function tryAcquire(role: Role, options: AcquireOptions): Promise<Lease | null> {
   const res = await pool.query<{ id: string; public_key: string }>(
     `UPDATE fee_payer_channels
         SET leased_until = now() + ($2 || ' seconds')::interval,
@@ -67,16 +77,34 @@ export async function acquire(role: Role = 'channel'): Promise<Lease> {
         SELECT id FROM fee_payer_channels
          WHERE role = $1 AND state = 'active'
            AND (leased_until IS NULL OR leased_until < now())
+           AND ($3::text IS NULL OR public_key = $3)
          ORDER BY leased_until NULLS FIRST
          FOR UPDATE SKIP LOCKED
          LIMIT 1)
       RETURNING id, public_key`,
-    [role, LEASE_SECONDS],
+    [role, options.leaseSeconds ?? LEASE_SECONDS, options.publicKey ?? null],
   );
 
   const row = res.rows[0];
-  if (!row) throw new NoChannelAvailableError();
-  return { id: row.id, publicKey: row.public_key, keypair: keypairFor(row.public_key) };
+  return row ? { id: row.id, publicKey: row.public_key, keypair: keypairFor(row.public_key) } : null;
+}
+
+/**
+ * Toma um channel livre. Lança `NoChannelAvailableError` se todos continuam
+ * ocupados depois de `waitMs`.
+ *
+ * Sem espera, duas âncoras simultâneas com um channel só davam 502 na segunda
+ * — e uma âncora recusada não volta sozinha. O relay continua sem esperar (o
+ * kit tem o próprio retry); as rotas da conta mestre esperam.
+ */
+export async function acquire(role: Role = 'channel', options: AcquireOptions = {}): Promise<Lease> {
+  const deadline = Date.now() + (options.waitMs ?? 0);
+  for (;;) {
+    const lease = await tryAcquire(role, options);
+    if (lease) return lease;
+    if (Date.now() >= deadline) throw new NoChannelAvailableError();
+    await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+  }
 }
 
 export async function release(leaseId: string, error?: string): Promise<void> {
@@ -92,8 +120,9 @@ export async function release(leaseId: string, error?: string): Promise<void> {
 export async function withChannel<T>(
   role: Role,
   fn: (lease: Lease) => Promise<T>,
+  options: AcquireOptions = {},
 ): Promise<T> {
-  const lease = await acquire(role);
+  const lease = await acquire(role, options);
   try {
     const out = await fn(lease);
     await release(lease.id);

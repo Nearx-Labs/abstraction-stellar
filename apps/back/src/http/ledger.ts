@@ -6,6 +6,7 @@
 import { Hono } from 'hono';
 import { env } from '../env.js';
 import * as ledger from '../chain/ledger.js';
+import { mintTxHashOf } from '../db/queries/master.js';
 
 export const ledgerRoutes = new Hono();
 
@@ -25,7 +26,7 @@ ledgerRoutes.get('/ledger', async (c) => {
   const contractId = ledgerId();
   if (!contractId) return c.json(notConfigured(), 409);
 
-  const limit = Math.min(Number(c.req.query('limit') ?? 20), 50);
+  const limit = Math.min(Number(c.req.query('limit') ?? 20), 40);
   const offset = Math.max(Number(c.req.query('offset') ?? 0), 0);
   const owner = c.req.query('owner');
 
@@ -45,25 +46,35 @@ ledgerRoutes.get('/ledger/:uuid', async (c) => {
   const contractId = ledgerId();
   if (!contractId) return c.json(notConfigured(), 409);
 
-  const record = await ledger.getRecord(contractId, c.req.param('uuid'));
+  const uuid = c.req.param('uuid');
+  const record = await ledger.getRecord(contractId, uuid);
   if (!record) {
     return c.json({ success: false, error: 'registro não encontrado', errorCode: 'NOT_FOUND' }, 404);
   }
-  return c.json({ success: true, contractId, record });
+  // O contrato não guarda o hash da transação que mintou; o serviço guarda. É
+  // o que o consumidor usa para montar o link do explorer depois de um retry.
+  const mintTxHash = await mintTxHashOf(uuid);
+  return c.json({ success: true, contractId, record: { ...record, mintTxHash } });
 });
 
 ledgerRoutes.get('/accounts/:address/ledger', async (c) => {
   const contractId = ledgerId();
   if (!contractId) return c.json(notConfigured(), 409);
 
-  const uuids = await ledger.recordsOf(contractId, c.req.param('address'));
-  const records = await Promise.all(
-    uuids.slice(-25).reverse().map((uuid) => ledger.getRecord(contractId, uuid)),
-  );
+  const address = c.req.param('address');
+  const limit = Math.min(Math.max(Number(c.req.query('limit') ?? 25), 1), 50);
+  const offset = Math.max(Number(c.req.query('offset') ?? 0), 0);
+  const [total, uuids] = await Promise.all([
+    ledger.balanceOf(contractId, address),
+    ledger.recordsOf(contractId, address, offset, limit),
+  ]);
+  const records = await Promise.all(uuids.map((uuid) => ledger.getRecord(contractId, uuid)));
   return c.json({
     success: true,
     contractId,
-    total: uuids.length,
+    total,
+    offset,
+    limit,
     items: records.filter((record) => record !== null),
   });
 });

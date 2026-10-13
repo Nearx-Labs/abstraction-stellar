@@ -19,6 +19,18 @@
 //!
 //! Multi-tenant por `(smart_account, context_rule_id)` — uma única instância
 //! do contrato serve todas as contas.
+//!
+//! ## Histórico em buckets
+//!
+//! A primeira versão guardava uma linha por chamada e recusava a 501ª chamada
+//! da janela, qualquer que fosse a cota: com `max_items` de 50.000 âncoras e
+//! janela de 30 dias, o teto real era 500 por mês. Aqui as chamadas da mesma
+//! fatia da janela (1/64 dela) somam na mesma linha, então o histórico tem no
+//! máximo ~65 linhas e o teto é só `max_items`.
+//!
+//! A janela fica conservadora: uma chamada sai da contagem até uma fatia mais
+//! tarde do que sairia na conta exata. A cota nunca é contornada; no máximo
+//! libera um pouco depois.
 use soroban_sdk::{
     auth::Context, contract, contracterror, contractevent, contractimpl, contracttype,
     panic_with_error, Address, Env, String, Symbol, TryFromVal, Vec,
@@ -29,12 +41,18 @@ use stellar_accounts::{
 };
 
 const DAY_IN_LEDGERS: u32 = 17_280;
-const TTL_EXTEND: u32 = 30 * DAY_IN_LEDGERS;
+/// 120 dias, igual aos ledgers: o mínimo com que a mainnet cria entrada
+/// persistente. Params, histórico e instância são renovados a cada `enforce`,
+/// ~1 dia por vez.
+const TTL_EXTEND: u32 = 120 * DAY_IN_LEDGERS;
 const TTL_THRESHOLD: u32 = TTL_EXTEND - DAY_IN_LEDGERS;
 
-/// Teto de entradas no histórico. Cada entrada é uma chamada, não um item —
-/// um lote de 100 ocupa uma linha só.
-const MAX_HISTORY: u32 = 500;
+/// Em quantas fatias a janela é dividida.
+const BUCKETS_PER_WINDOW: u32 = 64;
+/// Trava de segurança: com buckets, o histórico não passa de
+/// `BUCKETS_PER_WINDOW + 1` linhas — a não ser que `set_quota` encolha a
+/// janela, e mesmo aí as linhas antigas saem no prune seguinte.
+const MAX_HISTORY: u32 = 2 * BUCKETS_PER_WINDOW + 2;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -58,7 +76,8 @@ pub struct MintQuotaParams {
     pub period_ledgers: u32,
 }
 
-/// Uma chamada registrada: em que ledger e quantos itens consumiu.
+/// Consumo de uma fatia da janela: o ledger em que a fatia começa e quantos
+/// itens as chamadas dela consumiram juntas.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Consumption {
@@ -142,18 +161,30 @@ fn units_of(e: &Env, context: &Context) -> u32 {
     }
 }
 
-/// Remove do histórico as chamadas que já saíram da janela.
+/// Largura de uma fatia da janela, em ledgers.
+fn bucket_width(period: u32) -> u32 {
+    (period / BUCKETS_PER_WINDOW).max(1)
+}
+
+/// Ledger em que a fatia de `ledger` começa.
+fn bucket_of(ledger: u32, width: u32) -> u32 {
+    ledger - ledger % width
+}
+
+/// Remove do histórico as fatias que já saíram inteiras da janela.
 ///
-/// A comparação é `entry + period > current`, e não `entry > current - period`:
-/// a segunda forma satura em zero nos primeiros ledgers da rede (e nos testes),
-/// e aí uma chamada feita *agora* seria descartada na mesma hora — a cota
-/// nunca contaria nada.
+/// Uma fatia que começa em `s` cobre chamadas até `s + width - 1`, então ela só
+/// sai quando `s + width + period <= current` — é o que mantém a conta
+/// conservadora. A forma é `x + period > current`, e não `x > current - period`:
+/// a segunda satura em zero nos primeiros ledgers da rede (e nos testes), e aí
+/// uma chamada feita *agora* seria descartada na mesma hora.
 fn prune(e: &Env, history: &Vec<Consumption>, period: u32) -> Vec<Consumption> {
     let current = e.ledger().sequence();
+    let width = bucket_width(period);
 
     let mut kept = Vec::new(e);
     for entry in history.iter() {
-        if entry.ledger.saturating_add(period) > current {
+        if entry.ledger.saturating_add(width).saturating_add(period) > current {
             kept.push_back(entry);
         }
     }
@@ -198,19 +229,44 @@ impl Policy for MintQuotaPolicyContract {
         let units = units_of(e, &context);
         let used = used_units(&window).saturating_add(units);
 
-        if used > params.max_items || window.len() >= MAX_HISTORY {
+        if used > params.max_items {
             panic_with_error!(e, MintQuotaError::QuotaExceeded);
         }
 
-        window.push_back(Consumption {
-            ledger: e.ledger().sequence(),
-            units,
-        });
+        let bucket = bucket_of(e.ledger().sequence(), bucket_width(params.period_ledgers));
+        match window.last() {
+            Some(last) if last.ledger == bucket => {
+                window.set(
+                    window.len() - 1,
+                    Consumption {
+                        ledger: bucket,
+                        units: last.units.saturating_add(units),
+                    },
+                );
+            }
+            _ => window.push_back(Consumption {
+                ledger: bucket,
+                units,
+            }),
+        }
+        if window.len() > MAX_HISTORY {
+            panic_with_error!(e, MintQuotaError::QuotaExceeded);
+        }
 
         e.storage().persistent().set(&key, &window);
         e.storage()
             .persistent()
             .extend_ttl(&key, TTL_THRESHOLD, TTL_EXTEND);
+        // Params só era renovado no install/set_quota: arquivava ~30 dias depois
+        // do provisionamento e a regra parava de autorizar.
+        e.storage().persistent().extend_ttl(
+            &DataKey::Params(smart_account.clone(), context_rule.id),
+            TTL_THRESHOLD,
+            TTL_EXTEND,
+        );
+        e.storage()
+            .instance()
+            .extend_ttl(TTL_THRESHOLD, TTL_EXTEND);
 
         QuotaConsumed {
             smart_account,
@@ -271,9 +327,10 @@ impl MintQuotaPolicyContract {
             .unwrap_or(Vec::new(e));
         let window = prune(e, &history, params.period_ledgers);
 
+        let width = bucket_width(params.period_ledgers);
         let window_resets_at = window
             .first()
-            .map(|oldest| oldest.ledger + params.period_ledgers)
+            .map(|oldest| oldest.ledger + width + params.period_ledgers)
             .unwrap_or(0);
 
         MintQuotaData {

@@ -7,8 +7,9 @@
 //     número de itens autorizado;
 //   · quem recusa o item N+1 é o contrato, não um rate limit nosso.
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import { Address, nativeToScVal, xdr } from '@stellar/stellar-sdk';
-import { env } from '../env.js';
+import { env, features } from '../env.js';
 import { logger } from '../logger.js';
 import * as master from '../db/queries/master.js';
 import * as ledger from '../chain/ledger.js';
@@ -18,16 +19,25 @@ import {
   addServiceRule,
   deployManagedAccount,
   findRuleFor,
+  isDeployed,
   ownerSignerFor,
 } from '../chain/managedAccount.js';
-import { withChannel } from '../db/queries/channels.js';
+import { ensureRole } from '../chain/ledgerRoles.js';
+import { FeeCapError } from '../chain/feeCap.js';
+import { channels, registrar } from '../chain/keys.js';
+import { NoChannelAvailableError, withChannel } from '../db/queries/channels.js';
+import { ContractBusyError, withContractLock } from '../db/queries/contractLock.js';
 import { assertCanActOn, requireCaller, requireService } from './middleware/auth.js';
 
 export const masterRoutes = new Hono();
 
 const C_ADDRESS = /^C[A-Z2-7]{55}$/;
 /** Espelha MAX_BATCH em contracts/demo-ledger. */
-const MAX_BATCH = 100;
+const MAX_BATCH = 10;
+/** Um mint `pending` mais novo que isto pode estar em voo; mais velho, travou. */
+const PENDING_GRACE_MS = 5 * 60 * 1000;
+/** Lease do provisionamento: até cinco transações em sequência. */
+const PROVISION_LEASE_SECONDS = 600;
 /** Ledgers por dia, com fechamento a cada ~5s. */
 const DAY_IN_LEDGERS = 17_280;
 /** Espelhos de contracts/anchor-ledger. */
@@ -59,6 +69,57 @@ function notConfigured(what: string) {
   return { success: false as const, error: `${what} não configurado`, errorCode: 'NOT_CONFIGURED' };
 }
 
+function forbidden(c: Context, error: string) {
+  return c.json({ success: false, error, errorCode: 'FORBIDDEN' }, 403);
+}
+
+/**
+ * Quem pode ler ou mexer na conta mestre do app.
+ *
+ *   · secret key: sempre — é o backend do tenant.
+ *   · sessão de painel: só a sessão DA PRÓPRIA mestre (o login de senha do
+ *     painel custodial aponta para ela).
+ *   · `setup`: enquanto o app não tem mestre, uma sessão pode nomear a sua
+ *     própria conta — o fluxo de auto-custódia com passkey —, mas só com
+ *     `PANEL_MASTER_ADMIN`.
+ *
+ * Antes qualquer sessão do app passava. Como sessão nasce de conta registrada
+ * com a publishable key (pública), isso deixava qualquer um repontar ou
+ * revogar a mestre do tenant.
+ */
+async function controlsMaster(
+  c: Context,
+  appId: string,
+  options: { setup?: boolean } = {},
+): Promise<boolean> {
+  const caller = c.get('caller');
+  if (caller.service) return true;
+  if (!caller.session) return false;
+
+  const current = await master.masterAccountOf(appId);
+  if (current) return caller.session.contractId === current;
+  return Boolean(options.setup) && features.panelMasterAdmin;
+}
+
+/** Erro on-chain → resposta. FEE_CAP e falta de channel são temporários. */
+function onchainFailure(c: Context, error: unknown, quotaMessage: string) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof FeeCapError) {
+    return c.json({ success: false, error: message, errorCode: 'FEE_CAP' }, 503);
+  }
+  if (error instanceof NoChannelAvailableError) {
+    return c.json({ success: false, error: message, errorCode: 'NO_CHANNEL_AVAILABLE' }, 503);
+  }
+  if (error instanceof ContractBusyError) {
+    return c.json({ success: false, error: message, errorCode: 'CONTRACT_BUSY' }, 503);
+  }
+  // 6200 é QuotaExceeded na mint-quota-policy.
+  if (message.includes('6200')) {
+    return c.json({ success: false, error: quotaMessage, errorCode: 'QUOTA_EXCEEDED' }, 403);
+  }
+  return c.json({ success: false, error: message, errorCode: 'ONCHAIN_FAILED' }, 502);
+}
+
 /**
  * Estado completo: conta, chave do serviço, os grants e a cota de cada um.
  *
@@ -68,6 +129,9 @@ function notConfigured(what: string) {
  */
 masterRoutes.get('/master', requireCaller(), async (c) => {
   const { appId } = c.get('caller');
+  if (!(await controlsMaster(c, appId, { setup: true }))) {
+    return forbidden(c, 'só a secret key ou a sessão da conta mestre leem este estado');
+  }
   const [masterAccount, grants] = await Promise.all([
     master.masterAccountOf(appId),
     master.activeGrants(appId),
@@ -142,6 +206,10 @@ masterRoutes.post('/master', requireCaller(), async (c) => {
     );
   }
 
+  if (!(await controlsMaster(c, appId, { setup: true }))) {
+    return forbidden(c, 'a conta mestre só muda com secret key ou pela própria mestre');
+  }
+
   // Sessão de painel só pode nomear a própria conta; secret key pode nomear
   // qualquer conta registrada do app.
   const account = await assertCanActOn(c, contractId);
@@ -172,6 +240,10 @@ masterRoutes.post('/master/grant', requireCaller(), async (c) => {
     grantTxHash?: string;
     target?: string;
   }>();
+
+  if (!(await controlsMaster(c, appId, { setup: true }))) {
+    return forbidden(c, 'grant só com secret key ou pela própria conta mestre');
+  }
 
   // Omitido = inventário: é o que o painel mandava antes de existir a âncora.
   const contract = targetContract(body.target);
@@ -218,6 +290,9 @@ masterRoutes.post('/master/grant', requireCaller(), async (c) => {
 });
 
 masterRoutes.delete('/master/grant', requireCaller(), async (c) => {
+  if (!(await controlsMaster(c, c.get('caller').appId))) {
+    return forbidden(c, 'grant só com secret key ou pela própria conta mestre');
+  }
   const contract = targetContract(c.req.query('target'));
   if (!contract) {
     return c.json(
@@ -252,6 +327,12 @@ masterRoutes.delete('/master/grant', requireCaller(), async (c) => {
  */
 masterRoutes.post('/master/provision', requireCaller(), async (c) => {
   const { appId } = c.get('caller');
+  // Sem mestre ainda: só secret key provisiona. Com mestre: a própria mestre
+  // também pode repetir (é idempotente) para completar o que faltou.
+  if (!(await controlsMaster(c, appId))) {
+    return forbidden(c, 'provisionamento só com secret key ou pela própria conta mestre');
+  }
+
   const body = await c.req
     .json<{ ledgerMaxItems?: number; anchorMaxItems?: number; periodLedgers?: number }>()
     .catch(() => ({}) as Record<string, never>);
@@ -262,54 +343,116 @@ masterRoutes.post('/master/provision', requireCaller(), async (c) => {
     { target: 'anchor' as const, name: 'âncora do serviço', maxItems: body.anchorMaxItems ?? 50_000 },
   ];
 
+  // O endereço da conta é derivado do deployer. Quando o deployer era "o
+  // channel que estivesse livre", repetir o provisionamento com outro channel
+  // deployava uma SEGUNDA conta e sobrescrevia a mestre — sem regras. O
+  // deployer agora é fixo: o primeiro channel configurado.
+  const deployer = channels[0];
+  if (!deployer) return c.json(notConfigured('CHANNEL_SECRETS'), 409);
+
+  const unlock = await master.tryProvisionLock(appId);
+  if (!unlock) {
+    return c.json(
+      {
+        success: false,
+        error: 'já existe um provisionamento em andamento para este app',
+        errorCode: 'PROVISION_IN_PROGRESS',
+      },
+      409,
+    );
+  }
+
   try {
-    const result = await withChannel('channel', async (lease) => {
-      const { contractId, hash } = await deployManagedAccount({
-        appId,
-        payer: lease.keypair,
-      });
-      await master.setMasterAccount(appId, contractId);
+    const result = await withChannel(
+      'channel',
+      async (lease) => {
+        // Mestre já existente e viva on-chain: é ela, qualquer que seja o
+        // endereço que a derivação daria hoje.
+        const known = await master.masterAccountOf(appId);
+        let contractId: string;
+        let deployHash: string | null = null;
+        if (known && (await isDeployed(known))) {
+          contractId = known;
+        } else {
+          const deployed = await deployManagedAccount({ appId, payer: lease.keypair });
+          contractId = deployed.contractId;
+          deployHash = deployed.hash;
+          await master.setMasterAccount(appId, contractId);
+        }
 
-      const granted: Array<{ target: string; contextRuleId: number | null; hash: string }> = [];
+        const granted: Array<{ target: string; contextRuleId: number | null; hash: string | null }> = [];
 
-      for (const { target, name, maxItems } of wanted) {
-        const contract = TARGETS[target]();
+        for (const { target, name, maxItems } of wanted) {
+          const contract = TARGETS[target]();
 
-        // Já concedida numa rodada anterior: não gasta outra transação.
-        const existing = await master.activeGrant(appId, contract);
-        if (existing?.contextRuleId !== null && existing !== null) continue;
-        if (existing) await master.revokeGrant(existing.id);
+          // Grant válido = desta mestre e com regra on-chain conhecida.
+          const existing = await master.activeGrant(appId, contract);
+          if (existing && existing.contextRuleId !== null && existing.masterAccount === contractId) {
+            continue;
+          }
+          if (existing) await master.revokeGrant(existing.id);
 
-        const rule = await addServiceRule({
-          appId,
-          masterAccount: contractId,
-          targetContract: contract,
-          ruleName: name,
-          maxItems,
-          periodLedgers,
-          payer: lease.keypair,
-        });
+          // A regra pode já existir on-chain de uma rodada que caiu depois da
+          // transação e antes de gravar o grant. Recriar gastaria fee e deixaria
+          // duas regras para o mesmo alvo.
+          let contextRuleId = await findRuleFor(contractId, contract, lease.keypair);
+          let ruleHash: string | null = null;
+          if (contextRuleId === null) {
+            const rule = await addServiceRule({
+              appId,
+              masterAccount: contractId,
+              targetContract: contract,
+              ruleName: name,
+              maxItems,
+              periodLedgers,
+              payer: lease.keypair,
+            });
+            ruleHash = rule.hash;
+            contextRuleId = await findRuleFor(contractId, contract, lease.keypair);
+          }
 
-        const contextRuleId = await findRuleFor(contractId, contract, lease.keypair);
+          const signer = masterSignerIdentity(appId);
+          await master.createGrant({
+            appId,
+            masterAccount: contractId,
+            contextRuleId,
+            ed25519PublicKey: Buffer.from(signer.publicKeyHex, 'hex'),
+            targetContract: contract,
+            policyAddress: env.MINT_QUOTA_POLICY_ADDRESS,
+            maxItems,
+            periodLedgers,
+            grantTxHash: ruleHash,
+          });
 
-        const signer = masterSignerIdentity(appId);
-        await master.createGrant({
-          appId,
-          masterAccount: contractId,
-          contextRuleId,
-          ed25519PublicKey: Buffer.from(signer.publicKeyHex, 'hex'),
-          targetContract: contract,
-          policyAddress: env.MINT_QUOTA_POLICY_ADDRESS,
-          maxItems,
-          periodLedgers,
-          grantTxHash: rule.hash,
-        });
+          granted.push({ target, contextRuleId, hash: ruleHash });
+        }
 
-        granted.push({ target, contextRuleId, hash: rule.hash });
-      }
+        // A mestre precisa estar na allowlist de cada ledger: o grant autoriza
+        // a chave do serviço a assinar pela mestre, a allowlist autoriza a
+        // mestre a escrever no contrato.
+        const roles = [];
+        for (const [contract, role] of [
+          [env.DEMO_LEDGER_CONTRACT_ID, 'minter'],
+          [env.ANCHOR_CONTRACT_ID, 'writer'],
+        ] as const) {
+          const outcome = await ensureRole({
+            contractId: contract,
+            role,
+            account: contractId,
+            registrar,
+            payer: lease.keypair,
+          });
+          roles.push({ contract, role, changed: outcome.changed, hash: outcome.hash });
+        }
 
-      return { contractId, deployHash: hash, granted };
-    });
+        return { contractId, deployHash, granted, roles };
+      },
+      {
+        publicKey: deployer.publicKey(),
+        waitMs: env.CHANNEL_WAIT_MS,
+        leaseSeconds: PROVISION_LEASE_SECONDS,
+      },
+    );
 
     logger.info(
       { appId, masterAccount: result.contractId, granted: result.granted.length },
@@ -323,11 +466,16 @@ masterRoutes.post('/master/provision', requireCaller(), async (c) => {
       owner: ownerSignerFor(appId).publicKey(),
       signer: masterSignerIdentity(appId),
       granted: result.granted,
+      roles: result.roles,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logger.error({ appId, err: message }, 'provisionamento falhou');
-    return c.json({ success: false, error: message, errorCode: 'ONCHAIN_FAILED' }, 502);
+    logger.error(
+      { appId, err: error instanceof Error ? error.message : String(error) },
+      'provisionamento falhou',
+    );
+    return onchainFailure(c, error, 'cota excedida durante o provisionamento');
+  } finally {
+    await unlock();
   }
 });
 
@@ -339,7 +487,43 @@ async function requireGrant(appId: string, target: TargetName) {
     master.activeGrant(appId, TARGETS[target]()),
   ]);
   if (!masterAccount || !grant || grant.contextRuleId === null) return null;
+  // Grant de outra conta (a mestre foi trocada depois) assinaria com uma regra
+  // que não existe nesta: falharia on-chain, longe da causa.
+  if (grant.masterAccount !== masterAccount) return null;
   return { masterAccount, grant };
+}
+
+/** Rotas da conta mestre esperam por channel; o relay não. */
+const MASTER_LEASE = () => ({ waitMs: env.CHANNEL_WAIT_MS });
+
+/**
+ * Escreve num ledger como a conta mestre: espera a vez no contrato, toma um
+ * channel e submete. Uma transação que trava ao aplicar
+ * (`invokeHostFunctionTrapped`, tipicamente outro escritor fora deste processo
+ * mexeu no contador entre a simulação e a aplicação) é re-simulada e
+ * resubmetida uma vez — custa ~0,003 XLM, e a nova simulação já vê o contador
+ * atualizado.
+ */
+async function writeAsMaster(options: Omit<Parameters<typeof invokeAsMaster>[0], 'payer'>) {
+  return withContractLock(options.contractId, env.CONTRACT_LOCK_WAIT_MS, async () => {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await withChannel(
+          'channel',
+          (lease) => invokeAsMaster({ ...options, payer: lease.keypair }),
+          MASTER_LEASE(),
+        );
+      } catch (error) {
+        const failedOnApply =
+          error instanceof Error && error.message.includes('status=FAILED');
+        if (!failedOnApply || attempt >= 2) throw error;
+        logger.warn(
+          { contractId: options.contractId, fn: options.fn },
+          'transação travou ao aplicar; re-simulando e resubmetendo uma vez',
+        );
+      }
+    }
+  });
 }
 
 /** Minta um lote em nome do tenant. Server-to-server. */
@@ -379,20 +563,79 @@ masterRoutes.post('/ledger/mint', requireService(), async (c) => {
     return c.json({ success: false, error: 'name é obrigatório', errorCode: 'INVALID_PARAMS' }, 400);
   }
 
-  // Repetido gastaria cota e ainda assim o contrato recusaria por UuidTaken.
-  const already = await master.existingUuids(appId, uuids);
-  if (already.size > 0) {
+  const contractId = env.DEMO_LEDGER_CONTRACT_ID;
+  const fields = Object.entries(body.fields ?? {});
+  const payloadOf = (uuid: string) =>
+    master.buildPayload('mint', {
+      uuid,
+      name: body.name,
+      fields: body.fields ?? {},
+      ...(body.metadata ?? {}),
+    });
+
+  // ── Idempotência ──────────────────────────────────────────────────────────
+  // O UUID é a chave do consumidor (no MintVRS, o transaction.id). Um retry com
+  // o mesmo UUID depois de timeout, cota ou queda tem de convergir para o mesmo
+  // item, nunca para 409 eterno nem para um segundo item.
+  const known = new Map((await master.mintEntries(appId, uuids)).map((e) => [e.uuid, e]));
+  const confirmed = uuids.filter((u) => known.get(u)?.state === 'confirmed');
+
+  if (confirmed.length === uuids.length) {
+    return c.json(alreadyMinted(uuids, known));
+  }
+  if (confirmed.length > 0) {
     return c.json(
       {
         success: false,
-        error: `uuid já mintado: ${[...already].slice(0, 3).join(', ')}`,
+        error: `parte do lote já foi mintada: ${confirmed.slice(0, 3).join(', ')}`,
         errorCode: 'UUID_TAKEN',
       },
       409,
     );
   }
 
-  const fields = Object.entries(body.fields ?? {});
+  const inFlight = uuids.filter((u) => {
+    const entry = known.get(u);
+    return entry?.state === 'pending' && Date.now() - entry.createdAt.getTime() < PENDING_GRACE_MS;
+  });
+  if (inFlight.length > 0) {
+    return c.json(
+      {
+        success: false,
+        error: `mint em andamento para ${inFlight.slice(0, 3).join(', ')}; tente de novo em instantes`,
+        errorCode: 'UUID_PENDING',
+      },
+      409,
+    );
+  }
+
+  // `failed` ou `pending` velho: a tx pode ter entrado depois do timeout. A
+  // chain decide — se o item é da mestre, só falta confirmar a linha.
+  const settle = await settleFromChain(contractId, context.masterAccount, [...known.values()]);
+  if (settle.foreign.length > 0) {
+    return c.json(
+      {
+        success: false,
+        error: `uuid já existe on-chain com outro dono: ${settle.foreign.slice(0, 3).join(', ')}`,
+        errorCode: 'UUID_TAKEN',
+      },
+      409,
+    );
+  }
+  if (settle.confirmed.length === uuids.length) {
+    return c.json(alreadyMinted(uuids, new Map((await master.mintEntries(appId, uuids)).map((e) => [e.uuid, e]))));
+  }
+  if (settle.confirmed.length > 0) {
+    return c.json(
+      {
+        success: false,
+        error: `parte do lote já está on-chain: ${settle.confirmed.slice(0, 3).join(', ')}`,
+        errorCode: 'UUID_TAKEN',
+      },
+      409,
+    );
+  }
+
   const args = [
     new Address(context.masterAccount).toScVal(),
     xdr.ScVal.scvVec(uuids.map((u) => nativeToScVal(u, { type: 'string' }))),
@@ -410,13 +653,13 @@ masterRoutes.post('/ledger/mint', requireService(), async (c) => {
   ];
 
   const entryIds = await Promise.all(
-    uuids.map((uuid) => {
-      const { payload, hash } = master.buildPayload('mint', {
-        uuid,
-        name: body.name,
-        fields: body.fields ?? {},
-        ...(body.metadata ?? {}),
-      });
+    uuids.map(async (uuid) => {
+      const { payload, hash } = payloadOf(uuid);
+      const previous = known.get(uuid);
+      if (previous) {
+        await master.retryMintEntry(previous.id, context.masterAccount, payload, hash);
+        return previous.id;
+      }
       return master.recordEntry({
         appId,
         uuid,
@@ -429,17 +672,14 @@ masterRoutes.post('/ledger/mint', requireService(), async (c) => {
   );
 
   try {
-    const result = await withChannel('channel', (lease) =>
-      invokeAsMaster({
-        appId,
-        masterAccount: context.masterAccount,
-        contractId: env.DEMO_LEDGER_CONTRACT_ID,
-        fn: 'mint_batch',
-        args,
-        contextRuleId: context.grant.contextRuleId!,
-        payer: lease.keypair,
-      }),
-    );
+    const result = await writeAsMaster({
+      appId,
+      masterAccount: context.masterAccount,
+      contractId,
+      fn: 'mint_batch',
+      args,
+      contextRuleId: context.grant.contextRuleId!,
+    });
 
     await Promise.all(entryIds.map((id) => master.confirmEntry(id, result.hash)));
     logger.info({ appId, minted: uuids.length, hash: result.hash }, 'lote mintado');
@@ -447,20 +687,69 @@ masterRoutes.post('/ledger/mint', requireService(), async (c) => {
     return c.json({ success: true, minted: uuids.length, uuids, hash: result.hash });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await Promise.all(entryIds.map((id) => master.failEntry(id, message)));
 
-    // 6200 é QuotaExceeded na mint-quota-policy: o tenant não autorizou tanto.
-    const quotaHit = message.includes('6200');
-    return c.json(
-      {
-        success: false,
-        error: quotaHit ? 'a cota de itens concedida pelo tenant acabou' : message,
-        errorCode: quotaHit ? 'QUOTA_EXCEEDED' : 'ONCHAIN_FAILED',
-      },
-      quotaHit ? 403 : 502,
-    );
+    // 6107 = UuidTaken no contrato: corrida com uma tentativa anterior que
+    // entrou. De novo, a chain decide.
+    if (message.includes('6107')) {
+      const rows = await master.mintEntries(appId, uuids);
+      const after = await settleFromChain(contractId, context.masterAccount, rows, { force: true });
+      if (after.confirmed.length === uuids.length) {
+        return c.json(alreadyMinted(uuids, new Map((await master.mintEntries(appId, uuids)).map((e) => [e.uuid, e]))));
+      }
+    }
+
+    await Promise.all(entryIds.map((id) => master.failEntry(id, message)));
+    return onchainFailure(c, error, 'a cota de itens concedida pelo tenant acabou');
   }
 });
+
+/**
+ * Confere na chain as linhas que não estão `confirmed`: item da mestre → a
+ * linha vira `confirmed` (sem hash, se a tx se perdeu); item de outro dono →
+ * `foreign`. `force` inclui `pending` recentes (usado depois de um 6107).
+ */
+async function settleFromChain(
+  contractId: string,
+  masterAccount: string,
+  rows: master.MintEntry[],
+  options: { force?: boolean } = {},
+): Promise<{ confirmed: string[]; foreign: string[] }> {
+  const confirmed: string[] = [];
+  const foreign: string[] = [];
+  for (const row of rows) {
+    if (row.state === 'confirmed') continue;
+    if (
+      !options.force &&
+      row.state === 'pending' &&
+      Date.now() - row.createdAt.getTime() < PENDING_GRACE_MS
+    ) {
+      continue;
+    }
+    const owner = await ledger.ownerOf(contractId, row.uuid);
+    if (owner === null) continue;
+    if (owner === masterAccount) {
+      await master.confirmEntryWithoutHash(row.id, 'confirmado pela leitura on-chain');
+      confirmed.push(row.uuid);
+    } else {
+      foreign.push(row.uuid);
+    }
+  }
+  return { confirmed, foreign };
+}
+
+function alreadyMinted(uuids: string[], known: Map<string, master.MintEntry>) {
+  const hashes = Object.fromEntries(uuids.map((u) => [u, known.get(u)?.txHash ?? null]));
+  const unique = new Set(Object.values(hashes));
+  return {
+    success: true as const,
+    alreadyMinted: true as const,
+    minted: 0,
+    uuids,
+    // Um hash só quando o lote inteiro saiu na mesma transação.
+    hash: unique.size === 1 ? [...unique][0]! : null,
+    hashes,
+  };
+}
 
 /** Venda do marketplace: passa a posse de um item. Server-to-server. */
 masterRoutes.post('/ledger/transfer', requireService(), async (c) => {
@@ -515,24 +804,20 @@ masterRoutes.post('/ledger/transfer', requireService(), async (c) => {
   });
 
   try {
-    const result = await withChannel('channel', (lease) =>
-      invokeAsMaster({
-        appId,
-        masterAccount: context.masterAccount,
-        contractId: env.DEMO_LEDGER_CONTRACT_ID,
-        fn: 'transfer',
-        args: [nativeToScVal(uuid, { type: 'string' }), new Address(to).toScVal()],
-        contextRuleId: context.grant.contextRuleId!,
-        payer: lease.keypair,
-      }),
-    );
+    const result = await writeAsMaster({
+      appId,
+      masterAccount: context.masterAccount,
+      contractId: env.DEMO_LEDGER_CONTRACT_ID,
+      fn: 'transfer',
+      args: [nativeToScVal(uuid, { type: 'string' }), new Address(to).toScVal()],
+      contextRuleId: context.grant.contextRuleId!,
+    });
 
     await master.confirmEntry(entryId, result.hash);
     return c.json({ success: true, uuid, to, hash: result.hash });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await master.failEntry(entryId, message);
-    return c.json({ success: false, error: message, errorCode: 'ONCHAIN_FAILED' }, 502);
+    await master.failEntry(entryId, error instanceof Error ? error.message : String(error));
+    return onchainFailure(c, error, 'a cota de itens concedida pelo tenant acabou');
   }
 });
 
@@ -653,17 +938,14 @@ masterRoutes.post('/ledger/record', requireService(), async (c) => {
   ];
 
   try {
-    const result = await withChannel('channel', (lease) =>
-      invokeAsMaster({
-        appId,
-        masterAccount: context.masterAccount,
-        contractId: env.ANCHOR_CONTRACT_ID,
-        fn: 'register',
-        args,
-        contextRuleId: context.grant.contextRuleId!,
-        payer: lease.keypair,
-      }),
-    );
+    const result = await writeAsMaster({
+      appId,
+      masterAccount: context.masterAccount,
+      contractId: env.ANCHOR_CONTRACT_ID,
+      fn: 'register',
+      args,
+      contextRuleId: context.grant.contextRuleId!,
+    });
 
     await master.confirmEntry(entryId, result.hash);
     logger.info({ appId, kind, reference, hash: result.hash }, 'evento ancorado');
@@ -676,26 +958,19 @@ masterRoutes.post('/ledger/record', requireService(), async (c) => {
       entryId,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await master.failEntry(entryId, message);
-
-    // 6200 é QuotaExceeded na mint-quota-policy — a mesma policy vigia os dois
-    // alvos, e no anchor cada evento custa 1 unidade.
-    const quotaHit = message.includes('6200');
-    return c.json(
-      {
-        success: false,
-        error: quotaHit ? 'a cota de âncoras concedida pelo tenant acabou' : message,
-        errorCode: quotaHit ? 'QUOTA_EXCEEDED' : 'ONCHAIN_FAILED',
-      },
-      quotaHit ? 403 : 502,
-    );
+    await master.failEntry(entryId, error instanceof Error ? error.message : String(error));
+    // A mesma policy vigia os dois alvos; no anchor cada evento custa 1 unidade.
+    return onchainFailure(c, error, 'a cota de âncoras concedida pelo tenant acabou');
   }
 });
 
 /** O histórico de âncoras, com o payload que ficou fora da chain. */
 masterRoutes.get('/ledger/records', requireCaller(), async (c) => {
   const { appId } = c.get('caller');
+  // O payload fora da chain tem dados do negócio do tenant.
+  if (!(await controlsMaster(c, appId))) {
+    return forbidden(c, 'só a secret key ou a sessão da conta mestre leem os payloads');
+  }
   const limit = Math.min(Number(c.req.query('limit') ?? 25), 100);
   const offset = Math.max(Number(c.req.query('offset') ?? 0), 0);
 
@@ -718,6 +993,9 @@ function entryFallback(hash: string): string {
 /** O ledger completo do tenant, com o payload que ficou fora da chain. */
 masterRoutes.get('/ledger/entries', requireCaller(), async (c) => {
   const { appId } = c.get('caller');
+  if (!(await controlsMaster(c, appId))) {
+    return forbidden(c, 'só a secret key ou a sessão da conta mestre leem os payloads');
+  }
   const limit = Math.min(Number(c.req.query('limit') ?? 25), 100);
   const offset = Math.max(Number(c.req.query('offset') ?? 0), 0);
   return c.json({ success: true, items: await master.entriesFor(appId, limit, offset) });

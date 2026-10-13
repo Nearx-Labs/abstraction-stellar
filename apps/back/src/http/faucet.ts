@@ -14,7 +14,7 @@
 // se a escrita falhar ela é retentada em vez de sumir.
 import { Hono } from 'hono';
 import type { Context } from 'hono';
-import { env } from '../env.js';
+import { env, features } from '../env.js';
 import { logger } from '../logger.js';
 import * as faucet from '../db/queries/faucet.js';
 import * as outbox from '../db/queries/outbox.js';
@@ -25,6 +25,15 @@ import { assertCanActOn, requireCaller } from './middleware/auth.js';
 import { clientIp, hit } from './middleware/rateLimit.js';
 
 export const faucetRoutes = new Hono();
+
+// Desligado (fora da testnet, ou sem FAUCET_ENABLED fora de dev): a rota some.
+// Na mainnet ela entregaria XLM de verdade a qualquer conta registrada.
+faucetRoutes.use('/accounts/:address/faucet', async (c, next) => {
+  if (!features.faucet || !faucetKey) {
+    return c.json({ success: false, error: 'rota inexistente', errorCode: 'NOT_FOUND' }, 404);
+  }
+  await next();
+});
 
 function treasuryOf(c: Context): string | undefined {
   return c.get('caller').service?.app.treasuryId ?? env.TREASURY_CONTRACT_ID;
@@ -99,10 +108,10 @@ faucetRoutes.post('/accounts/:address/faucet', requireCaller(), async (c) => {
 
   // Sem saldo, a transferência falharia depois de já ter aberto o claim.
   try {
-    const balance = await classicBalance(faucetKey.publicKey());
+    const balance = await classicBalance(faucetKey!.publicKey());
     if (balance < env.FAUCET_MIN_BALANCE_STROOPS) {
       logger.error(
-        { publicKey: faucetKey.publicKey(), balance },
+        { publicKey: faucetKey!.publicKey(), balance },
         'conta de faucet sem saldo suficiente',
       );
       return c.json(
@@ -132,7 +141,7 @@ faucetRoutes.post('/accounts/:address/faucet', requireCaller(), async (c) => {
 
   // Perna 1 — XLM.
   try {
-    const { hash } = await sacTransfer(faucetKey, address, amount);
+    const { hash } = await sacTransfer(faucetKey!, address, amount);
     await faucet.markXlmSent(claimId, hash);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

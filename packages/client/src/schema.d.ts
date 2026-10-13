@@ -58,6 +58,9 @@ export interface paths {
          *     Aceita `{func, auth}` (o proxy monta e paga) ou `{xdr}` (envelopa em
          *     fee-bump). Antes de pagar aplica allowlist de alvos, teto por
          *     transação e reserva atômica da quota diária.
+         *
+         *     Desligado com `RELAY_ENABLED=false` (padrão fora de development): a rota
+         *     responde 404.
          */
         post: operations["relaySubmit"];
         delete?: never;
@@ -384,9 +387,16 @@ export interface paths {
          *     minta todo dia não está na `Default`, então não consegue alterar a regra
          *     que a limita, adicionar signer nem mover fundos.
          *
-         *     **Idempotente.** O endereço é derivado do app, então repetir encontra a
-         *     conta existente e completa só o que falta — útil quando a segunda regra
-         *     falhou e a primeira não.
+         *     **Idempotente.** O deployer é fixo (o primeiro channel configurado) e a
+         *     mestre já existente é reaproveitada; regra que já existe on-chain não é
+         *     recriada. Repetir completa só o que falta — útil quando a segunda regra
+         *     falhou e a primeira não. Chamadas simultâneas do mesmo app recebem 409
+         *     `PROVISION_IN_PROGRESS`.
+         *
+         *     No fim, a mestre entra na allowlist dos dois ledgers (`set_minter` no
+         *     inventário, `set_writer` na âncora), assinada pelo registrar do serviço.
+         *
+         *     Sem mestre ainda, só a secret key provisiona.
          */
         post: operations["provisionMaster"];
         delete?: never;
@@ -427,12 +437,17 @@ export interface paths {
         put?: never;
         /**
          * Minta um lote como a conta mestre
-         * @description Até 100 UUIDs por chamada — não é escolha de desenho, é o limite de
-         *     recursos de uma transação Soroban. Um inventário de 10.000 sai em ~100
-         *     chamadas.
+         * @description Até 10 UUIDs por chamada — é o limite de escritas de uma transação
+         *     Soroban: cada item grava 3 entradas no contrato.
          *
-         *     A cota concedida pelo tenant conta ITENS: um lote de 100 desconta 100, e
+         *     A cota concedida pelo tenant conta ITENS: um lote de 10 desconta 10, e
          *     um lote maior que o teto é recusado inteiro.
+         *
+         *     **Idempotente por UUID.** Repetir um lote já mintado devolve 200 com
+         *     `alreadyMinted: true` e o hash original, sem nova transação. Um UUID cuja
+         *     tentativa anterior falhou (ou travou) é conferido na chain: se o item já
+         *     é da mestre, a linha é confirmada; se não existe, a tentativa é refeita
+         *     reaproveitando a linha.
          */
         post: operations["mintBatch"];
         delete?: never;
@@ -569,7 +584,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Itens em posse de uma conta */
+        /**
+         * Itens em posse de uma conta
+         * @description Paginado no contrato; a ordem da lista de um dono não é estável.
+         */
         get: operations["listAccountItems"];
         put?: never;
         post?: never;
@@ -759,9 +777,17 @@ export interface components {
         };
         MintResult: {
             success?: boolean;
+            /** @description 0 quando `alreadyMinted`. */
             minted?: number;
             uuids?: string[];
-            hash?: string;
+            /** @description `null` só em `alreadyMinted`, quando o lote saiu em mais de uma transação ou o hash se perdeu. */
+            hash?: string | null;
+            /** @description O lote inteiro já estava mintado; nada foi submetido. */
+            alreadyMinted?: boolean;
+            /** @description Em `alreadyMinted`: hash do mint de cada UUID. */
+            hashes?: {
+                [key: string]: string | null;
+            };
         };
         TransferResult: {
             success?: boolean;
@@ -912,7 +938,17 @@ export interface components {
                 /** @enum {string} */
                 target?: "ledger" | "anchor";
                 contextRuleId?: number | null;
-                hash?: string;
+                /** @description `null` quando a regra já existia on-chain e foi reaproveitada. */
+                hash?: string | null;
+            }[];
+            /** @description A mestre na allowlist de cada ledger. */
+            roles?: {
+                contract?: string;
+                /** @enum {string} */
+                role?: "minter" | "writer";
+                /** @description `false` quando já estava habilitada. */
+                changed?: boolean;
+                hash?: string | null;
             }[];
         };
         AnchorResult: {
@@ -1438,7 +1474,16 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description `ACCOUNT_NOT_DEPLOYED`: a conta ainda não existe on-chain. */
+            /** @description `FORBIDDEN`: registro com publishable key desligado (`ACCOUNT_SELF_REGISTRATION`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description `ACCOUNT_NOT_DEPLOYED`: a conta ainda não existe on-chain. `ACCOUNT_EXISTS`: com publishable key só se registra conta nova — credencial em conta existente, só com secret key. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1933,6 +1978,15 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            /** @description `FORBIDDEN`: sessão que não é da própria conta mestre. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     setMasterAccount: {
@@ -1970,6 +2024,15 @@ export interface operations {
             };
             /** @description Falha. `errorCode` é estável e serve para o cliente decidir. */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description `FORBIDDEN`: com mestre já definida, só a secret key ou a sessão da própria mestre a trocam; sem mestre, sessão só com `PANEL_MASTER_ADMIN`. */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2036,7 +2099,34 @@ export interface operations {
                 };
             };
             /** @description Falha. `errorCode` é estável e serve para o cliente decidir. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description `PROVISION_IN_PROGRESS` ou `NOT_CONFIGURED`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Falha. `errorCode` é estável e serve para o cliente decidir. */
             502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description `FEE_CAP`, `NO_CHANNEL_AVAILABLE` ou `CONTRACT_BUSY` (fila de escrita do contrato cheia — ~1 escrita por ledger): temporário. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2099,6 +2189,15 @@ export interface operations {
                 };
             };
             /** @description Falha. `errorCode` é estável e serve para o cliente decidir. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Falha. `errorCode` é estável e serve para o cliente decidir. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2139,6 +2238,15 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            /** @description Falha. `errorCode` é estável e serve para o cliente decidir. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     mintBatch: {
@@ -2164,7 +2272,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Lote mintado. */
+            /** @description Lote mintado, ou já mintado antes (`alreadyMinted`). */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2200,7 +2308,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description `NO_GRANT` ou `UUID_TAKEN`. */
+            /** @description `NO_GRANT`; `UUID_TAKEN` (parte do lote já existe, ou o item é de outro dono); `UUID_PENDING` (tentativa anterior ainda em voo — repita em instantes). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2211,6 +2319,15 @@ export interface operations {
             };
             /** @description Falha. `errorCode` é estável e serve para o cliente decidir. */
             502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description `FEE_CAP`, `NO_CHANNEL_AVAILABLE` ou `CONTRACT_BUSY` (fila de escrita do contrato cheia — ~1 escrita por ledger): temporário. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2275,6 +2392,15 @@ export interface operations {
             };
             /** @description Falha. `errorCode` é estável e serve para o cliente decidir. */
             502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description `FEE_CAP`, `NO_CHANNEL_AVAILABLE` ou `CONTRACT_BUSY` (fila de escrita do contrato cheia — ~1 escrita por ledger): temporário. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2360,6 +2486,15 @@ export interface operations {
             };
             /** @description Falha. `errorCode` é estável e serve para o cliente decidir. */
             502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description `FEE_CAP`, `NO_CHANNEL_AVAILABLE` ou `CONTRACT_BUSY` (fila de escrita do contrato cheia — ~1 escrita por ledger): temporário. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2460,7 +2595,10 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        record?: components["schemas"]["LedgerRecord"];
+                        record?: components["schemas"]["LedgerRecord"] & {
+                            /** @description Transação que mintou, guardada pelo serviço (o contrato não guarda). `null` quando o mint foi confirmado só pela leitura on-chain. */
+                            mintTxHash?: string | null;
+                        };
                     };
                 };
             };
@@ -2514,11 +2652,23 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            /** @description Falha. `errorCode` é estável e serve para o cliente decidir. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     listAccountItems: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
             header?: never;
             path: {
                 /** @description C-address da smart account. */

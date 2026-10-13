@@ -25,14 +25,29 @@
 //! é argumento e dá `require_auth()` — então a autorização passa pelo
 //! `__check_auth` da smart account e a policy instalada na regra é aplicada
 //! on-chain, igual ao `mint_batch` do demo-ledger.
+//!
+//! ## Quem pode escrever
+//!
+//! `require_auth()` sozinho só prova que o caller assinou — qualquer conta
+//! assinava um registro com o `tenant_id` de outro e poluía o histórico dele, e
+//! 256 tenants inventados enchiam a lista e travavam o primeiro registro de um
+//! tenant de verdade. Por isso só escreve quem está na allowlist, mantida pelo
+//! `registrar` (a chave operacional do serviço, que habilita a mestre de cada
+//! tenant no provisionamento). O `admin` (chave fria) troca o registrar e faz
+//! upgrade — os mesmos papéis do demo-ledger.
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, panic_with_error, Address,
     BytesN, Env, String, Symbol, Vec,
 };
 
 const DAY_IN_LEDGERS: u32 = 17_280;
-/// TTL alvo das entradas: 90 dias, igual ao demo-ledger.
-const RECORD_TTL: u32 = 90 * DAY_IN_LEDGERS;
+/// TTL alvo: 120 dias, o mínimo com que a mainnet já cria entrada persistente.
+/// Registro novo nasce com isso e não paga extensão nenhuma; o que é tocado de
+/// novo (instância, contadores) é renovado ~1 dia por vez, barato. Um alvo
+/// maior fazia cada mint pagar aluguel adiantado: com 178 dias, ~6 XLM por
+/// chave na testnet (onde o aluguel por KB é ~6,7x o da mainnet e o mínimo é
+/// 7 dias), medido em 2026-10-12.
+const RECORD_TTL: u32 = 120 * DAY_IN_LEDGERS;
 const RECORD_TTL_THRESHOLD: u32 = RECORD_TTL - DAY_IN_LEDGERS;
 
 /// UUID de tenant tem 36 chars; a folga cobre slug.
@@ -58,6 +73,8 @@ pub enum AnchorError {
     ReferenceInvalid = 6302,
     /// A lista consultável de tenants encheu.
     TooManyTenants = 6303,
+    /// O caller não está na allowlist de quem pode escrever.
+    NotWriter = 6304,
 }
 
 /// Um evento ancorado.
@@ -95,6 +112,12 @@ pub enum DataKey {
     TCount(String),
     /// (tenant, índice local) -> seq global.
     TRec(String, u32),
+    /// Chave fria: troca o registrar e faz upgrade (instance).
+    Admin,
+    /// Chave operacional: mantém a allowlist de writers (instance).
+    Registrar,
+    /// Allowlist de writers (instance).
+    Writer(Address),
 }
 
 #[contractevent]
@@ -109,6 +132,36 @@ pub struct Registered {
     pub seq: u64,
     pub payload_hash: BytesN<32>,
     pub amount: i128,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WriterUpdated {
+    #[topic]
+    pub writer: Address,
+    pub allowed: bool,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RoleUpdated {
+    #[topic]
+    pub role: Symbol,
+    pub account: Address,
+}
+
+fn admin_of(e: &Env) -> Address {
+    e.storage().instance().get(&DataKey::Admin).unwrap()
+}
+
+fn registrar_of(e: &Env) -> Address {
+    e.storage().instance().get(&DataKey::Registrar).unwrap()
+}
+
+fn extend_instance(e: &Env) {
+    e.storage()
+        .instance()
+        .extend_ttl(RECORD_TTL_THRESHOLD, RECORD_TTL);
 }
 
 fn validate(e: &Env, tenant_id: &String, reference: &String) {
@@ -136,6 +189,14 @@ pub struct AnchorLedger;
 
 #[contractimpl]
 impl AnchorLedger {
+    /// `admin` é a chave fria (upgrade e troca do registrar); `registrar` é a
+    /// chave operacional do serviço.
+    pub fn __constructor(e: &Env, admin: Address, registrar: Address) {
+        e.storage().instance().set(&DataKey::Admin, &admin);
+        e.storage().instance().set(&DataKey::Registrar, &registrar);
+        extend_instance(e);
+    }
+
     /// Ancora um evento e devolve o `seq` global atribuído.
     ///
     /// `caller.require_auth()` é o que amarra o contrato à abstração de conta:
@@ -157,6 +218,14 @@ impl AnchorLedger {
         amount: i128,
     ) -> u64 {
         caller.require_auth();
+        let allowed: bool = e
+            .storage()
+            .instance()
+            .get(&DataKey::Writer(caller.clone()))
+            .unwrap_or(false);
+        if !allowed {
+            panic_with_error!(e, AnchorError::NotWriter);
+        }
         validate(e, &tenant_id, &reference);
 
         let seq: u64 = e.storage().instance().get(&DataKey::Seq).unwrap_or(0);
@@ -203,9 +272,7 @@ impl AnchorLedger {
         }
 
         e.storage().instance().set(&DataKey::Seq, &(seq + 1));
-        e.storage()
-            .instance()
-            .extend_ttl(RECORD_TTL_THRESHOLD, RECORD_TTL);
+        extend_instance(e);
 
         Registered {
             tenant_id,
@@ -219,6 +286,66 @@ impl AnchorLedger {
 
         seq
     }
+
+    // --- papéis ---------------------------------------------------------
+
+    /// Habilita ou desabilita uma conta para registrar. Só o registrar.
+    pub fn set_writer(e: &Env, writer: Address, allowed: bool) {
+        registrar_of(e).require_auth();
+        let key = DataKey::Writer(writer.clone());
+        if allowed {
+            e.storage().instance().set(&key, &true);
+        } else {
+            e.storage().instance().remove(&key);
+        }
+        extend_instance(e);
+        WriterUpdated { writer, allowed }.publish(e);
+    }
+
+    pub fn is_writer(e: &Env, account: Address) -> bool {
+        e.storage()
+            .instance()
+            .get(&DataKey::Writer(account))
+            .unwrap_or(false)
+    }
+
+    pub fn set_registrar(e: &Env, registrar: Address) {
+        admin_of(e).require_auth();
+        e.storage().instance().set(&DataKey::Registrar, &registrar);
+        extend_instance(e);
+        RoleUpdated {
+            role: Symbol::new(e, "registrar"),
+            account: registrar,
+        }
+        .publish(e);
+    }
+
+    pub fn set_admin(e: &Env, admin: Address) {
+        admin_of(e).require_auth();
+        e.storage().instance().set(&DataKey::Admin, &admin);
+        extend_instance(e);
+        RoleUpdated {
+            role: Symbol::new(e, "admin"),
+            account: admin,
+        }
+        .publish(e);
+    }
+
+    pub fn admin(e: &Env) -> Address {
+        admin_of(e)
+    }
+
+    pub fn registrar(e: &Env) -> Address {
+        registrar_of(e)
+    }
+
+    /// Troca o wasm. Só o admin. O storage é preservado.
+    pub fn upgrade(e: &Env, new_wasm_hash: BytesN<32>) {
+        admin_of(e).require_auth();
+        e.deployer().update_current_contract_wasm(new_wasm_hash);
+    }
+
+    // --- leitura --------------------------------------------------------
 
     pub fn get_record(e: &Env, seq: u64) -> AnchorRecord {
         e.storage()

@@ -29,6 +29,7 @@ import { logger } from '../logger.js';
 import { NETWORK_PASSPHRASE, server } from './rpc.js';
 import { contractAddressFromPreimage } from './derive.js';
 import { invokeAsMaster, masterSignerFor } from './masterSigner.js';
+import { assertWithinFeeCap } from './feeCap.js';
 
 /** Chave que administra a conta. Derivada, como a do serviço, mas com rótulo próprio. */
 export function ownerSignerFor(appId: string): Keypair {
@@ -96,7 +97,7 @@ export function managedAccountAddress(appId: string, deployerPublicKey: string):
   );
 }
 
-async function isDeployed(contractId: string): Promise<boolean> {
+export async function isDeployed(contractId: string): Promise<boolean> {
   try {
     const entry = xdr.LedgerKey.contractData(
       new xdr.LedgerKeyContractData({
@@ -164,6 +165,7 @@ export async function deployManagedAccount(options: {
     .build();
 
   const prepared = await server.prepareTransaction(tx);
+  assertWithinFeeCap(prepared);
   prepared.sign(options.payer);
 
   const sent = await server.sendTransaction(prepared);

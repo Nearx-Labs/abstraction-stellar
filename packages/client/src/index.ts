@@ -210,9 +210,12 @@ export class AbstractionClient {
     ): Promise<Ok<paths['/v1/accounts/{address}/sponsorships']['get']>> =>
       this.request('GET', `/v1/accounts/${address}/sponsorships${query(params)}`),
 
-    /** Itens em posse da conta. */
-    items: (address: string): Promise<Ok<paths['/v1/accounts/{address}/ledger']['get']>> =>
-      this.request('GET', `/v1/accounts/${address}/ledger`),
+    /** Itens em posse da conta, paginados (até 50 por página). */
+    items: (
+      address: string,
+      params: { limit?: number; offset?: number } = {},
+    ): Promise<Ok<paths['/v1/accounts/{address}/ledger']['get']>> =>
+      this.request('GET', `/v1/accounts/${address}/ledger${query(params)}`),
   };
 
   // ── Faucet (testnet) ──────────────────────────────────────────────────────
@@ -282,7 +285,8 @@ export class AbstractionClient {
 
   readonly ledger = {
     /**
-     * Minta um lote. Até `MAX_BATCH` itens por chamada.
+     * Minta um lote. Até `MAX_BATCH` itens por chamada. Idempotente por UUID:
+     * repetir um lote já mintado devolve `alreadyMinted` com o hash original.
      *
      * O limite não é escolha de desenho: é o teto de recursos de uma transação
      * Soroban. Para inventários grandes use `mintAll`.
@@ -418,7 +422,7 @@ export class AbstractionClient {
 }
 
 /** Itens por transação, espelhando `MAX_BATCH` do contrato demo-ledger. */
-export const MAX_BATCH = 100;
+export const MAX_BATCH = 10;
 
 function query(params: Record<string, string | number | undefined>): string {
   const entries = Object.entries(params).filter(([, value]) => value !== undefined);

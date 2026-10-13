@@ -127,7 +127,7 @@
           "relay"
         ],
         "summary": "Submete uma transação patrocinada",
-        "description": "O endpoint que o smart-account-kit chama. A chave vai no path porque\no `RelayerClient` não expõe gancho para header de autenticação.\n\nAceita `{func, auth}` (o proxy monta e paga) ou `{xdr}` (envelopa em\nfee-bump). Antes de pagar aplica allowlist de alvos, teto por\ntransação e reserva atômica da quota diária.",
+        "description": "O endpoint que o smart-account-kit chama. A chave vai no path porque\no `RelayerClient` não expõe gancho para header de autenticação.\n\nAceita `{func, auth}` (o proxy monta e paga) ou `{xdr}` (envelopa em\nfee-bump). Antes de pagar aplica allowlist de alvos, teto por\ntransação e reserva atômica da quota diária.\n\nDesligado com `RELAY_ENABLED=false` (padrão fora de development): a rota\nresponde 404.",
         "security": [],
         "parameters": [
           {
@@ -698,8 +698,18 @@
               }
             }
           },
+          "403": {
+            "description": "`FORBIDDEN`: registro com publishable key desligado (`ACCOUNT_SELF_REGISTRATION`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "409": {
-            "description": "`ACCOUNT_NOT_DEPLOYED`: a conta ainda não existe on-chain.",
+            "description": "`ACCOUNT_NOT_DEPLOYED`: a conta ainda não existe on-chain. `ACCOUNT_EXISTS`: com publishable key só se registra conta nova — credencial em conta existente, só com secret key.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1534,6 +1544,16 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "`FORBIDDEN`: sessão que não é da própria conta mestre.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       },
@@ -1601,6 +1621,16 @@
               }
             }
           },
+          "403": {
+            "description": "`FORBIDDEN`: com mestre já definida, só a secret key ou a sessão da própria mestre a trocam; sem mestre, sessão só com `PANEL_MASTER_ADMIN`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
             "content": {
@@ -1621,7 +1651,7 @@
           "master"
         ],
         "summary": "Provisiona a conta mestre do tenant, sem passkey",
-        "description": "O caminho do produto: o tenant faz login social e já encontra a conta\npronta. Não registra digital, não guarda seed, não assina nada.\n\nTrês transações patrocinadas: deploy da smart account com a chave de\nOWNER na regra `Default`, depois uma regra `CallContract` por alvo com a\nchave do SERVIÇO e a cota instalada.\n\nDuas chaves porque a cota precisa ser fronteira de verdade: a chave que\nminta todo dia não está na `Default`, então não consegue alterar a regra\nque a limita, adicionar signer nem mover fundos.\n\n**Idempotente.** O endereço é derivado do app, então repetir encontra a\nconta existente e completa só o que falta — útil quando a segunda regra\nfalhou e a primeira não.",
+        "description": "O caminho do produto: o tenant faz login social e já encontra a conta\npronta. Não registra digital, não guarda seed, não assina nada.\n\nTrês transações patrocinadas: deploy da smart account com a chave de\nOWNER na regra `Default`, depois uma regra `CallContract` por alvo com a\nchave do SERVIÇO e a cota instalada.\n\nDuas chaves porque a cota precisa ser fronteira de verdade: a chave que\nminta todo dia não está na `Default`, então não consegue alterar a regra\nque a limita, adicionar signer nem mover fundos.\n\n**Idempotente.** O deployer é fixo (o primeiro channel configurado) e a\nmestre já existente é reaproveitada; regra que já existe on-chain não é\nrecriada. Repetir completa só o que falta — útil quando a segunda regra\nfalhou e a primeira não. Chamadas simultâneas do mesmo app recebem 409\n`PROVISION_IN_PROGRESS`.\n\nNo fim, a mestre entra na allowlist dos dois ledgers (`set_minter` no\ninventário, `set_writer` na âncora), assinada pelo registrar do serviço.\n\nSem mestre ainda, só a secret key provisiona.",
         "security": [
           {
             "sessionCookie": []
@@ -1678,8 +1708,38 @@
               }
             }
           },
+          "403": {
+            "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`PROVISION_IN_PROGRESS` ou `NOT_CONFIGURED`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "502": {
             "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`FEE_CAP`, `NO_CHANNEL_AVAILABLE` ou `CONTRACT_BUSY` (fila de escrita do contrato cheia — ~1 escrita por ledger): temporário.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1779,6 +1839,16 @@
               }
             }
           },
+          "403": {
+            "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "409": {
             "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
             "content": {
@@ -1840,6 +1910,16 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -1851,7 +1931,7 @@
           "ledger"
         ],
         "summary": "Minta um lote como a conta mestre",
-        "description": "Até 100 UUIDs por chamada — não é escolha de desenho, é o limite de\nrecursos de uma transação Soroban. Um inventário de 10.000 sai em ~100\nchamadas.\n\nA cota concedida pelo tenant conta ITENS: um lote de 100 desconta 100, e\num lote maior que o teto é recusado inteiro.",
+        "description": "Até 10 UUIDs por chamada — é o limite de escritas de uma transação\nSoroban: cada item grava 3 entradas no contrato.\n\nA cota concedida pelo tenant conta ITENS: um lote de 10 desconta 10, e\num lote maior que o teto é recusado inteiro.\n\n**Idempotente por UUID.** Repetir um lote já mintado devolve 200 com\n`alreadyMinted: true` e o hash original, sem nova transação. Um UUID cuja\ntentativa anterior falhou (ou travou) é conferido na chain: se o item já\né da mestre, a linha é confirmada; se não existe, a tentativa é refeita\nreaproveitando a linha.",
         "security": [
           {
             "secretKey": []
@@ -1871,7 +1951,7 @@
                   "uuids": {
                     "type": "array",
                     "minItems": 1,
-                    "maxItems": 100,
+                    "maxItems": 10,
                     "items": {
                       "type": "string"
                     },
@@ -1899,7 +1979,7 @@
         },
         "responses": {
           "200": {
-            "description": "Lote mintado.",
+            "description": "Lote mintado, ou já mintado antes (`alreadyMinted`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1939,7 +2019,7 @@
             }
           },
           "409": {
-            "description": "`NO_GRANT` ou `UUID_TAKEN`.",
+            "description": "`NO_GRANT`; `UUID_TAKEN` (parte do lote já existe, ou o item é de outro dono); `UUID_PENDING` (tentativa anterior ainda em voo — repita em instantes).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1950,6 +2030,16 @@
           },
           "502": {
             "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`FEE_CAP`, `NO_CHANNEL_AVAILABLE` ou `CONTRACT_BUSY` (fila de escrita do contrato cheia — ~1 escrita por ledger): temporário.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2042,6 +2132,16 @@
           },
           "502": {
             "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`FEE_CAP`, `NO_CHANNEL_AVAILABLE` ou `CONTRACT_BUSY` (fila de escrita do contrato cheia — ~1 escrita por ledger): temporário.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2173,6 +2273,16 @@
           },
           "502": {
             "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`FEE_CAP`, `NO_CHANNEL_AVAILABLE` ou `CONTRACT_BUSY` (fila de escrita do contrato cheia — ~1 escrita por ledger): temporário.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2356,7 +2466,23 @@
                   "type": "object",
                   "properties": {
                     "record": {
-                      "$ref": "#/components/schemas/LedgerRecord"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/LedgerRecord"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "mintTxHash": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "description": "Transação que mintou, guardada pelo serviço (o contrato não guarda). `null` quando o mint foi confirmado só pela leitura on-chain."
+                            }
+                          }
+                        }
+                      ]
                     }
                   }
                 }
@@ -2441,6 +2567,16 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -2452,6 +2588,7 @@
           "ledger"
         ],
         "summary": "Itens em posse de uma conta",
+        "description": "Paginado no contrato; a ordem da lista de um dono não é estável.",
         "security": [],
         "parameters": [
           {
@@ -2462,6 +2599,23 @@
             "schema": {
               "type": "string",
               "pattern": "^C[A-Z2-7]{55}$"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 25,
+              "maximum": 50
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 0
             }
           }
         ],
@@ -3056,7 +3210,8 @@
             "type": "boolean"
           },
           "minted": {
-            "type": "integer"
+            "type": "integer",
+            "description": "0 quando `alreadyMinted`."
           },
           "uuids": {
             "type": "array",
@@ -3065,7 +3220,25 @@
             }
           },
           "hash": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`null` só em `alreadyMinted`, quando o lote saiu em mais de uma transação ou o hash se perdeu."
+          },
+          "alreadyMinted": {
+            "type": "boolean",
+            "description": "O lote inteiro já estava mintado; nada foi submetido."
+          },
+          "hashes": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description": "Em `alreadyMinted`: hash do mint de cada UUID."
           }
         }
       },
@@ -3518,7 +3691,40 @@
                   ]
                 },
                 "hash": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "`null` quando a regra já existia on-chain e foi reaproveitada."
+                }
+              }
+            }
+          },
+          "roles": {
+            "type": "array",
+            "description": "A mestre na allowlist de cada ledger.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "contract": {
                   "type": "string"
+                },
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "minter",
+                    "writer"
+                  ]
+                },
+                "changed": {
+                  "type": "boolean",
+                  "description": "`false` quando já estava habilitada."
+                },
+                "hash": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               }
             }

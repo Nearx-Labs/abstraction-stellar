@@ -136,7 +136,7 @@ describe('entradas de âncora', () => {
     const found = await master.recordsFor(appId, { reference });
     expect(found).toHaveLength(2);
     // o índice único de mint é parcial e não alcança âncora
-    expect(await master.existingUuids(appId, [reference])).toEqual(new Set());
+    expect(await master.mintEntries(appId, [reference])).toEqual([]);
   });
 
   it('filtra por tipo de evento', async () => {
@@ -176,7 +176,7 @@ describe('entradas de âncora', () => {
       payloadHash: hash,
     });
 
-    expect(await master.existingUuids(appId, [uuid])).toEqual(new Set([uuid]));
+    expect((await master.mintEntries(appId, [uuid])).map((e) => e.uuid)).toEqual([uuid]);
     expect(await master.recordsFor(appId, { reference: uuid })).toHaveLength(0);
   });
 });

@@ -408,9 +408,40 @@ Ambas produzem erros que não apontam para a causa, e as duas já morderam:
 
 ## Antes da mainnet
 
+- **Uma instância por rede, com banco próprio.** `NETWORK_PASSPHRASE` e
+  `RPC_URL` valem para o processo inteiro, e dois processos no mesmo Postgres
+  desabilitam os channels um do outro. Contratos, seeds (`MASTER_SIGNER_SEED`,
+  `SUBJECT_SALT`, `ISSUER_SEED_HEX`) e contas de papel também são por
+  ambiente: compartilhar channel entre instâncias colide no sequence number.
+- **Deploy com os wasm congelados.** `scripts/deploy-contracts.sh` confere o
+  sha256 contra `contracts/RELEASE.sha256` e imprime as linhas de env. O que foi
+  ensaiado na testnet é o que vai para a mainnet.
+- **Superfície mínima.** O MintVRS só usa secret key: na mainnet,
+  `RELAY_ENABLED`, `FAUCET_ENABLED`, `ACCOUNT_SELF_REGISTRATION`,
+  `PANEL_MASTER_ADMIN` e `BOOTSTRAP_ALLOW_DEPLOY` ficam desligados (é o padrão
+  fora de development).
 - **Recalibrar os tetos de fee.** Os valores atuais saem do custo medido no
   testnet (~1,02 XLM para criar uma context rule). Em mainnet as fees são bem
-  menores.
+  menores. `MASTER_MAX_FEE_STROOPS` limita o que uma transação da conta mestre
+  pode custar.
+
+### TTL (runbook)
+
+Entradas persistentes arquivam quando o TTL acaba, e a próxima transação que
+as toca paga a restauração (na testnet, um mint de 1 item já saiu por 4 e por
+11,7 XLM). Os ledgers e a policy renovam o que tocam — instância, registros,
+índices, `Params` e histórico da cota — para 120 dias, o mínimo com que a
+mainnet já cria entrada persistente (então registro novo não paga extensão, e a
+instância é renovada ~1 dia por vez). Na testnet o mínimo é 7 dias e o aluguel
+por KB é ~6,7x o da mainnet: lá cada escrita custa bem mais.
+O que NÃO se renova sozinho: o wasm e a instância do `ed25519-verifier`, o wasm
+da smart account e a instância de cada conta mestre. A cada ~90 dias:
+
+```bash
+stellar contract extend --id <ED25519_VERIFIER_ADDRESS> --ledgers-to-extend 3000000 --source-account <id> --network <rede>
+stellar contract extend --id <conta mestre C…> --ledgers-to-extend 3000000 --source-account <id> --network <rede>
+stellar contract extend --wasm-hash <ACCOUNT_WASM_HASH> --ledgers-to-extend 3000000 --source-account <id> --network <rede>
+```
 - **Tirar a chave do owner do Treasury da API.** `set_allowance` é
   `#[only_owner]` e o contrato não tem `upgrade`, então criar um papel
   `provisioner` que provisione mas não saque exige redeploy.

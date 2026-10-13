@@ -102,44 +102,44 @@ describe('mint em lote', () => {
   });
 
   it('mintAll fatia o inventário em transações do tamanho do limite', async () => {
-    const { client, calls } = stub([{ body: { success: true, minted: 100, hash: 'abc' } }]);
-    const uuids = Array.from({ length: 250 }, (_, i) => `uuid-${i}`);
+    const { client, calls } = stub([{ body: { success: true, minted: MAX_BATCH, hash: 'abc' } }]);
+    const uuids = Array.from({ length: MAX_BATCH * 2 + 5 }, (_, i) => `uuid-${i}`);
 
     const result = await client.mintAll({ uuids, name: 'Ingresso' });
 
     expect(calls).toHaveLength(3);
-    expect((calls[0]!.body as { uuids: string[] }).uuids).toHaveLength(100);
-    expect((calls[2]!.body as { uuids: string[] }).uuids).toHaveLength(50);
-    expect(result.minted).toHaveLength(250);
+    expect((calls[0]!.body as { uuids: string[] }).uuids).toHaveLength(MAX_BATCH);
+    expect((calls[2]!.body as { uuids: string[] }).uuids).toHaveLength(5);
+    expect(result.minted).toHaveLength(MAX_BATCH * 2 + 5);
     expect(result.failed).toHaveLength(0);
   });
 
   it('mintAll para quando a cota acaba, e diz o que passou', async () => {
     const { client, fetchStub } = stub([
-      { body: { success: true, minted: 100, hash: 'h1' } },
+      { body: { success: true, minted: MAX_BATCH, hash: 'h1' } },
       { status: 403, body: { errorCode: 'QUOTA_EXCEEDED', error: 'cota acabou' } },
     ]);
-    const uuids = Array.from({ length: 300 }, (_, i) => `uuid-${i}`);
+    const uuids = Array.from({ length: MAX_BATCH * 3 }, (_, i) => `uuid-${i}`);
 
     const result = await client.mintAll({ uuids, name: 'Ingresso' });
 
     // O terceiro lote nem é tentado: insistir queimaria fee sem chance de passar.
     expect(fetchStub).toHaveBeenCalledTimes(2);
-    expect(result.minted).toHaveLength(100);
+    expect(result.minted).toHaveLength(MAX_BATCH);
     expect(result.failed[0]!.error.code).toBe('QUOTA_EXCEEDED');
   });
 
   it('mintAll reporta progresso', async () => {
-    const { client } = stub([{ body: { success: true, minted: 100, hash: 'h' } }]);
+    const { client } = stub([{ body: { success: true, minted: MAX_BATCH, hash: 'h' } }]);
     const progress: number[] = [];
 
     await client.mintAll({
-      uuids: Array.from({ length: 150 }, (_, i) => `u${i}`),
+      uuids: Array.from({ length: MAX_BATCH + MAX_BATCH / 2 }, (_, i) => `u${i}`),
       name: 'X',
       onProgress: (p) => progress.push(p.minted),
     });
 
-    expect(progress).toEqual([100, 150]);
+    expect(progress).toEqual([MAX_BATCH, MAX_BATCH + MAX_BATCH / 2]);
   });
 });
 

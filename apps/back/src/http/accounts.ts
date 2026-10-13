@@ -5,7 +5,8 @@
 // validar: o contrato precisa existir on-chain. `external_id` é o campo que um
 // backend consumidor usa para achar a conta do seu usuário.
 import { Hono } from 'hono';
-import { env } from '../env.js';
+import { env, features } from '../env.js';
+import * as master from '../db/queries/master.js';
 import { resolveByKey } from '../db/queries/apps.js';
 import * as accounts from '../db/queries/accounts.js';
 import * as quota from '../db/queries/quota.js';
@@ -52,6 +53,39 @@ accountRoutes.post(
 
     if (!resolved) {
       return c.json({ success: false, error: 'chave inválida', errorCode: 'UNAUTHORIZED' }, 401);
+    }
+
+    // A publishable key é pública por construção (vai no bundle do front).
+    // Antes, este caminho fazia upsert em qualquer contractId e anexava a
+    // credencial — inclusive na conta mestre do tenant. Com a passkey anexada,
+    // `/authn/verify` emitia uma sessão cujo contractId ERA a mestre. Por isso:
+    // desligado por padrão fora de dev, e mesmo ligado só cria conta nova.
+    const viaPublishable = Boolean(body.publishableKey);
+    if (viaPublishable) {
+      if (!features.accountSelfRegistration) {
+        return c.json(
+          {
+            success: false,
+            error: 'registro de conta pelo browser desligado neste ambiente',
+            errorCode: 'FORBIDDEN',
+          },
+          403,
+        );
+      }
+      const [already, masterAccount] = await Promise.all([
+        accounts.byContractId(resolved.app.id, body.contractId),
+        master.masterAccountOf(resolved.app.id),
+      ]);
+      if (already || masterAccount === body.contractId) {
+        return c.json(
+          {
+            success: false,
+            error: 'conta já registrada; credencial nova só com secret key',
+            errorCode: 'ACCOUNT_EXISTS',
+          },
+          409,
+        );
+      }
     }
 
     const exists = await contractExists(body.contractId);
