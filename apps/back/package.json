@@ -19,7 +19,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.13.0",
-    "@stellar/stellar-sdk": "16.0.1",
+    "@stellar/stellar-sdk": "16.4.1",
     "hono": "^4.6.0",
     "pg": "^8.13.1",
     "pino": "^9.5.0",
@@ -32,5 +32,8 @@
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.8"
+  },
+  "overrides": {
+    "@stellar/stellar-sdk": "16.4.1"
   }
 }
