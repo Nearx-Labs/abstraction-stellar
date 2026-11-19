@@ -851,6 +851,11 @@ export const openapi = {
           'tentativa anterior falhou (ou travou) é conferido na chain: se o item já',
           'é da mestre, a linha é confirmada; se não existe, a tentativa é refeita',
           'reaproveitando a linha.',
+          '',
+          '**Lotes (ledger v3).** Com `fields._collection` (a coleção) e `fields._lot`',
+          '(número do lote, a partir de 1), o contrato confere o teto do lote no',
+          'cronograma registrado por `POST /v1/ledger/lots` e recusa o lote inteiro se',
+          'passar (`LOT_CAP_EXCEEDED`). Outros campos começando com `_` são recusados.',
         ].join('\n'),
         security: SERVICE_ONLY,
         requestBody: {
@@ -872,7 +877,8 @@ export const openapi = {
                   fields: {
                     type: 'object',
                     additionalProperties: { type: 'string' },
-                    description: 'Campos livres, até 16, gravados no contrato.',
+                    description:
+                      'Campos livres, até 16, gravados no contrato. `_collection` e `_lot` marcam o mint de um lote; outros `_` são recusados.',
                   },
                   metadata: {
                     type: 'object',
@@ -892,10 +898,83 @@ export const openapi = {
             ...ERROR_RESPONSE,
             description:
               '`NO_GRANT`; `UUID_TAKEN` (parte do lote já existe, ou o item é de outro dono); ' +
-              '`UUID_PENDING` (tentativa anterior ainda em voo — repita em instantes).',
+              '`UUID_PENDING` (tentativa anterior ainda em voo — repita em instantes); ' +
+              '`LOT_CAP_EXCEEDED`, `LOT_NOT_FOUND` ou `LOTS_UNSUPPORTED` (ledger sem lotes).',
           },
           502: ERROR_RESPONSE,
           503: { ...ERROR_RESPONSE, description: '`FEE_CAP`, `NO_CHANNEL_AVAILABLE` ou `CONTRACT_BUSY` (fila de escrita do contrato cheia — ~1 escrita por ledger): temporário.' },
+        },
+      },
+    },
+    '/v1/ledger/lots': {
+      post: {
+        operationId: 'defineLots',
+        tags: ['ledger'],
+        summary: 'Registra ou estende o cronograma de lotes de uma coleção',
+        description: [
+          'Venda por lotes, como ingresso: cada lote tem teto (`cap`) e preço em',
+          'centavos, e o preço nunca cai de um lote para o seguinte. O cronograma fica',
+          'no ledger (v3), por conta mestre e coleção, e o mint com `_collection`/`_lot`',
+          'respeita o teto de cada lote.',
+          '',
+          '**Só acrescenta e é idempotente.** A lista é conferida com a chain antes:',
+          'igual → 200 com `alreadyDefined: true` e nenhuma transação; os lotes',
+          'on-chain + novos no fim → transação; qualquer outra coisa (lote anunciado',
+          'mudou ou sumiu) → 409 `LOT_SCHEDULE_CONFLICT` com o cronograma atual.',
+        ].join('\n'),
+        security: SERVICE_ONLY,
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['collection', 'lots'],
+                properties: {
+                  collection: { type: 'string', maxLength: 64, description: 'No MintVRS, o id do tipo de chave.' },
+                  lots: {
+                    type: 'array',
+                    minItems: 1,
+                    maxItems: 20,
+                    items: {
+                      type: 'object',
+                      required: ['cap', 'price'],
+                      properties: {
+                        cap: { type: 'integer', minimum: 1 },
+                        price: { type: 'integer', minimum: 0, description: 'Centavos.' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: 'Cronograma registrado, ou já igual na chain.', content: { 'application/json': { schema: { $ref: '#/components/schemas/LotSchedule' } } } },
+          400: { ...ERROR_RESPONSE, description: '`INVALID_PARAMS`, `LOTS_INVALID` ou `LOT_PRICE_DECREASING`.' },
+          401: ERROR_RESPONSE,
+          403: { ...ERROR_RESPONSE, description: '`QUOTA_EXCEEDED`: cada registro consome 1 da cota.' },
+          404: { ...ERROR_RESPONSE, description: '`LOTS_DISABLED`: superfície desligada (`LEDGER_LOTS_ENABLED`).' },
+          409: { ...ERROR_RESPONSE, description: '`NO_GRANT`, `LOT_SCHEDULE_CONFLICT` ou `LOTS_UNSUPPORTED` (ledger anterior à v3).' },
+          502: ERROR_RESPONSE,
+          503: ERROR_RESPONSE,
+        },
+      },
+    },
+    '/v1/ledger/lots/{collection}': {
+      get: {
+        operationId: 'getLots',
+        tags: ['ledger'],
+        summary: 'Cronograma on-chain de uma coleção da conta mestre',
+        description: 'Lido do contrato por simulação: cada lote com o teto, o preço (centavos) e quantos já foram mintados.',
+        parameters: [{ name: 'collection', in: 'path', required: true, schema: { type: 'string' } }],
+        security: PANEL_OR_SERVICE,
+        responses: {
+          200: { description: 'Cronograma (vazio se a coleção não tem).', content: { 'application/json': { schema: { $ref: '#/components/schemas/LotSchedule' } } } },
+          401: ERROR_RESPONSE,
+          404: { ...ERROR_RESPONSE, description: '`LOTS_DISABLED`.' },
+          409: { ...ERROR_RESPONSE, description: '`NO_MASTER` ou `LOTS_UNSUPPORTED`.' },
         },
       },
     },
@@ -1381,6 +1460,30 @@ export const openapi = {
             additionalProperties: { type: ['string', 'null'] },
             description: 'Em `alreadyMinted`: hash do mint de cada UUID.',
           },
+        },
+      },
+      Lot: {
+        type: 'object',
+        required: ['number', 'cap', 'price', 'minted'],
+        properties: {
+          number: { type: 'integer', description: 'A partir de 1 — o mesmo do campo `_lot`.' },
+          cap: { type: 'integer' },
+          price: { type: 'integer', description: 'Centavos.' },
+          minted: { type: 'integer' },
+        },
+      },
+      LotSchedule: {
+        type: 'object',
+        required: ['success', 'collection', 'lots'],
+        properties: {
+          success: { type: 'boolean' },
+          collection: { type: 'string' },
+          minter: { type: 'string', description: 'A conta mestre dona do cronograma.' },
+          contractId: { type: 'string' },
+          lots: { type: 'array', items: { $ref: '#/components/schemas/Lot' } },
+          alreadyDefined: { type: 'boolean', description: 'A chain já tinha esta lista; nada foi submetido.' },
+          added: { type: 'integer', description: 'Lotes acrescentados nesta chamada.' },
+          hash: { type: 'string', description: 'Hash do `define_lots`, quando houve transação.' },
         },
       },
       TransferResult: {

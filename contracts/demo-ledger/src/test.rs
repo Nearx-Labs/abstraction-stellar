@@ -7,7 +7,10 @@ use soroban_sdk::{
 };
 use std::string::ToString;
 
-use crate::{DemoLedger, DemoLedgerClient, MAX_BATCH, MAX_FIELDS, MAX_PAGE, MAX_RECORD_PAGE};
+use crate::{
+    DemoLedger, DemoLedgerClient, Lot, LotSpec, MAX_BATCH, MAX_FIELDS, MAX_LOTS, MAX_PAGE,
+    MAX_RECORD_PAGE, VERSION,
+};
 
 struct Setup {
     e: Env,
@@ -589,4 +592,358 @@ fn minting_extends_the_instance_ttl() {
     let after = e.as_contract(&client.address, || e.storage().instance().get_ttl());
     assert!(after > before.saturating_sub(1_000_000), "instância não foi renovada");
     assert!(after >= 119 * 17_280, "TTL abaixo do alvo: {after}");
+}
+
+// --- lotes (v3) ---------------------------------------------------------
+
+const COLLECTION: &str = "8a6b1d3e-1111-4000-8000-000000000001";
+
+fn schedule(e: &Env, lots: &[(u32, u64)]) -> Vec<LotSpec> {
+    let mut out = Vec::new(e);
+    for (cap, price) in lots {
+        out.push_back(LotSpec {
+            cap: *cap,
+            price: *price,
+        });
+    }
+    out
+}
+
+fn lot_fields(e: &Env, lot: &str) -> Map<String, String> {
+    fields(
+        e,
+        &[("campaignId", "c-1"), ("_collection", COLLECTION), ("_lot", lot)],
+    )
+}
+
+fn uuids(e: &Env, from: u32, count: u32) -> Vec<String> {
+    let mut out = Vec::new(e);
+    for n in from..from + count {
+        out.push_back(uuid(e, n));
+    }
+    out
+}
+
+fn mint_in_lot(e: &Env, client: &DemoLedgerClient, owner: &Address, from: u32, count: u32, lot: &str) {
+    client.mint_batch(
+        owner,
+        &uuids(e, from, count),
+        &String::from_str(e, "Chave Pista"),
+        &String::from_str(e, ""),
+        &lot_fields(e, lot),
+    );
+}
+
+fn minted_of(client: &DemoLedgerClient, e: &Env, owner: &Address) -> std::vec::Vec<u32> {
+    client
+        .lots(owner, &String::from_str(e, COLLECTION))
+        .iter()
+        .map(|l| l.minted)
+        .collect()
+}
+
+#[test]
+fn version_reports_three() {
+    let (_e, client, _master) = setup();
+    assert_eq!(client.version(), VERSION);
+    assert_eq!(VERSION, 3);
+}
+
+#[test]
+fn define_lots_records_the_schedule_and_repeating_it_is_a_no_op() {
+    let (e, client, master) = setup();
+    let col = String::from_str(&e, COLLECTION);
+    let specs = schedule(&e, &[(3, 12_000), (3, 15_600)]);
+
+    assert_eq!(client.define_lots(&master, &col, &specs), 2);
+    assert_eq!(client.define_lots(&master, &col, &specs), 2);
+
+    let lots = client.lots(&master, &col);
+    assert_eq!(lots.len(), 2);
+    assert_eq!(
+        lots.get(1).unwrap(),
+        Lot {
+            cap: 3,
+            price: 15_600,
+            minted: 0
+        }
+    );
+}
+
+#[test]
+fn define_lots_appends_lots_at_the_end() {
+    let (e, client, master) = setup();
+    let col = String::from_str(&e, COLLECTION);
+    client.define_lots(&master, &col, &schedule(&e, &[(3, 12_000)]));
+    mint_in_lot(&e, &client, &master, 0, 2, "1");
+
+    let grown = schedule(&e, &[(3, 12_000), (2, 15_600)]);
+    assert_eq!(client.define_lots(&master, &col, &grown), 2);
+    // O mintado do lote 1 sobrevive ao acréscimo.
+    assert_eq!(minted_of(&client, &e, &master), std::vec![2, 0]);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #6113)")]
+fn an_announced_lot_cannot_change_its_price() {
+    let (e, client, master) = setup();
+    let col = String::from_str(&e, COLLECTION);
+    client.define_lots(&master, &col, &schedule(&e, &[(3, 12_000), (3, 15_600)]));
+    client.define_lots(&master, &col, &schedule(&e, &[(3, 12_000), (3, 14_000)]));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #6113)")]
+fn an_announced_lot_cannot_be_dropped() {
+    let (e, client, master) = setup();
+    let col = String::from_str(&e, COLLECTION);
+    client.define_lots(&master, &col, &schedule(&e, &[(3, 12_000), (3, 15_600)]));
+    client.define_lots(&master, &col, &schedule(&e, &[(3, 12_000)]));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #6112)")]
+fn a_lot_cheaper_than_the_previous_one_is_rejected() {
+    let (e, client, master) = setup();
+    let col = String::from_str(&e, COLLECTION);
+    client.define_lots(&master, &col, &schedule(&e, &[(3, 15_600), (3, 12_000)]));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #6112)")]
+fn an_appended_lot_cheaper_than_the_last_stored_one_is_rejected() {
+    let (e, client, master) = setup();
+    let col = String::from_str(&e, COLLECTION);
+    client.define_lots(&master, &col, &schedule(&e, &[(3, 15_600)]));
+    client.define_lots(&master, &col, &schedule(&e, &[(3, 15_600), (3, 12_000)]));
+}
+
+#[test]
+fn same_price_in_consecutive_lots_is_allowed() {
+    let (e, client, master) = setup();
+    let col = String::from_str(&e, COLLECTION);
+    assert_eq!(
+        client.define_lots(&master, &col, &schedule(&e, &[(3, 12_000), (3, 12_000)])),
+        2
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #6111)")]
+fn an_empty_schedule_is_rejected() {
+    let (e, client, master) = setup();
+    client.define_lots(&master, &String::from_str(&e, COLLECTION), &Vec::new(&e));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #6111)")]
+fn a_lot_with_zero_cap_is_rejected() {
+    let (e, client, master) = setup();
+    client.define_lots(
+        &master,
+        &String::from_str(&e, COLLECTION),
+        &schedule(&e, &[(3, 12_000), (0, 15_600)]),
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #6111)")]
+fn a_schedule_above_max_lots_is_rejected() {
+    let (e, client, master) = setup();
+    let many: std::vec::Vec<(u32, u64)> = (0..=MAX_LOTS).map(|n| (1, n as u64)).collect();
+    client.define_lots(&master, &String::from_str(&e, COLLECTION), &schedule(&e, &many));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #6110)")]
+fn only_a_minter_defines_lots() {
+    let (e, client, _master) = setup();
+    let outsider = Address::generate(&e);
+    client.define_lots(
+        &outsider,
+        &String::from_str(&e, COLLECTION),
+        &schedule(&e, &[(3, 12_000)]),
+    );
+}
+
+#[test]
+fn a_lot_mints_exactly_up_to_its_cap() {
+    let (e, client, master) = setup();
+    let col = String::from_str(&e, COLLECTION);
+    client.define_lots(&master, &col, &schedule(&e, &[(3, 12_000), (3, 15_600)]));
+
+    mint_in_lot(&e, &client, &master, 0, 2, "1");
+    client.mint(
+        &master,
+        &uuid(&e, 2),
+        &String::from_str(&e, "Chave Pista"),
+        &String::from_str(&e, ""),
+        &lot_fields(&e, "1"),
+    );
+    mint_in_lot(&e, &client, &master, 3, 1, "2");
+
+    assert_eq!(minted_of(&client, &e, &master), std::vec![3, 1]);
+    assert_eq!(client.total_supply(), 4);
+
+    let record = client.get_record(&uuid(&e, 3));
+    assert_eq!(
+        record.fields.get(String::from_str(&e, "_lot")),
+        Some(String::from_str(&e, "2"))
+    );
+    assert_eq!(
+        record.fields.get(String::from_str(&e, "_collection")),
+        Some(String::from_str(&e, COLLECTION))
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #6115)")]
+fn one_item_past_the_lot_cap_is_rejected() {
+    let (e, client, master) = setup();
+    client.define_lots(
+        &master,
+        &String::from_str(&e, COLLECTION),
+        &schedule(&e, &[(3, 12_000), (3, 15_600)]),
+    );
+    mint_in_lot(&e, &client, &master, 0, 3, "1");
+    mint_in_lot(&e, &client, &master, 3, 1, "1");
+}
+
+#[test]
+fn a_batch_past_the_cap_mints_nothing() {
+    let (e, client, master) = setup();
+    let col = String::from_str(&e, COLLECTION);
+    client.define_lots(&master, &col, &schedule(&e, &[(3, 12_000)]));
+
+    let result = client.try_mint_batch(
+        &master,
+        &uuids(&e, 0, 4),
+        &String::from_str(&e, "Chave Pista"),
+        &String::from_str(&e, ""),
+        &lot_fields(&e, "1"),
+    );
+    assert!(result.is_err());
+    assert_eq!(client.total_supply(), 0);
+    assert_eq!(minted_of(&client, &e, &master), std::vec![0]);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #6114)")]
+fn minting_into_a_collection_without_schedule_is_rejected() {
+    let (e, client, master) = setup();
+    mint_in_lot(&e, &client, &master, 0, 1, "1");
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #6114)")]
+fn minting_into_a_lot_past_the_schedule_is_rejected() {
+    let (e, client, master) = setup();
+    client.define_lots(
+        &master,
+        &String::from_str(&e, COLLECTION),
+        &schedule(&e, &[(3, 12_000), (3, 15_600)]),
+    );
+    mint_in_lot(&e, &client, &master, 0, 1, "3");
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #6114)")]
+fn schedules_belong_to_their_minter() {
+    let (e, client, master) = setup();
+    client.define_lots(
+        &master,
+        &String::from_str(&e, COLLECTION),
+        &schedule(&e, &[(3, 12_000)]),
+    );
+    // Outro tenant habilitado não gasta o lote do primeiro: o cronograma é
+    // (minter, coleção), e o dele não existe.
+    let other = Address::generate(&e);
+    client.set_minter(&other, &true);
+    mint_in_lot(&e, &client, &other, 0, 1, "1");
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #6117)")]
+fn an_unknown_reserved_field_is_rejected_even_outside_a_lot() {
+    let (e, client, master) = setup();
+    client.mint(
+        &master,
+        &uuid(&e, 1),
+        &String::from_str(&e, "Item"),
+        &String::from_str(&e, ""),
+        &fields(&e, &[("_price", "100")]),
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #6116)")]
+fn collection_without_lot_number_is_rejected() {
+    let (e, client, master) = setup();
+    client.mint_batch(
+        &master,
+        &uuids(&e, 0, 1),
+        &String::from_str(&e, "Item"),
+        &String::from_str(&e, ""),
+        &fields(&e, &[("_collection", COLLECTION)]),
+    );
+}
+
+#[test]
+fn malformed_lot_numbers_are_rejected() {
+    let (e, client, master) = setup();
+    client.define_lots(
+        &master,
+        &String::from_str(&e, COLLECTION),
+        &schedule(&e, &[(3, 12_000)]),
+    );
+    for bad in ["0", "01", "1a", "", "99999", "21"] {
+        let result = client.try_mint_batch(
+            &master,
+            &uuids(&e, 0, 1),
+            &String::from_str(&e, "Item"),
+            &String::from_str(&e, ""),
+            &lot_fields(&e, bad),
+        );
+        assert!(result.is_err(), "_lot={bad:?} deveria ser recusado");
+    }
+    assert_eq!(client.total_supply(), 0);
+}
+
+#[test]
+fn a_full_batch_in_a_lot_fits_the_transaction_limits() {
+    let (e, client, master) = setup();
+    let col = String::from_str(&e, COLLECTION);
+    client.define_lots(&master, &col, &schedule(&e, &[(MAX_BATCH, 12_000)]));
+
+    // Pior caso de tamanho: 16 campos, 2 deles reservados, valores no teto.
+    let mut f = lot_fields(&e, "1");
+    let long = "x".repeat(256);
+    for n in 0..(MAX_FIELDS - 3) {
+        f.set(
+            String::from_str(&e, &std::format!("campo{n}")),
+            String::from_str(&e, &long),
+        );
+    }
+    assert_eq!(f.len(), MAX_FIELDS);
+
+    e.cost_estimate().budget().reset_default();
+    client.mint_batch(
+        &master,
+        &uuids(&e, 0, MAX_BATCH),
+        &String::from_str(&e, "Chave Pista"),
+        &String::from_str(&e, ""),
+        &f,
+    );
+    let r = e.cost_estimate().resources();
+    assert!(r.write_entries <= 50, "write_entries={}", r.write_entries);
+    assert!(r.write_bytes <= 132 * 1024, "write_bytes={}", r.write_bytes);
+    assert_eq!(minted_of(&client, &e, &master), std::vec![MAX_BATCH]);
+}
+
+#[test]
+fn minting_outside_a_lot_is_unchanged() {
+    let (e, client, master) = setup();
+    mint_n(&e, &client, &master, 0, 3);
+    assert_eq!(client.total_supply(), 3);
+    assert_eq!(client.lots(&master, &String::from_str(&e, COLLECTION)).len(), 0);
 }

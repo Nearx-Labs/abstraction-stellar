@@ -448,8 +448,61 @@ export interface paths {
          *     tentativa anterior falhou (ou travou) é conferido na chain: se o item já
          *     é da mestre, a linha é confirmada; se não existe, a tentativa é refeita
          *     reaproveitando a linha.
+         *
+         *     **Lotes (ledger v3).** Com `fields._collection` (a coleção) e `fields._lot`
+         *     (número do lote, a partir de 1), o contrato confere o teto do lote no
+         *     cronograma registrado por `POST /v1/ledger/lots` e recusa o lote inteiro se
+         *     passar (`LOT_CAP_EXCEEDED`). Outros campos começando com `_` são recusados.
          */
         post: operations["mintBatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/ledger/lots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Registra ou estende o cronograma de lotes de uma coleção
+         * @description Venda por lotes, como ingresso: cada lote tem teto (`cap`) e preço em
+         *     centavos, e o preço nunca cai de um lote para o seguinte. O cronograma fica
+         *     no ledger (v3), por conta mestre e coleção, e o mint com `_collection`/`_lot`
+         *     respeita o teto de cada lote.
+         *
+         *     **Só acrescenta e é idempotente.** A lista é conferida com a chain antes:
+         *     igual → 200 com `alreadyDefined: true` e nenhuma transação; os lotes
+         *     on-chain + novos no fim → transação; qualquer outra coisa (lote anunciado
+         *     mudou ou sumiu) → 409 `LOT_SCHEDULE_CONFLICT` com o cronograma atual.
+         */
+        post: operations["defineLots"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/ledger/lots/{collection}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Cronograma on-chain de uma coleção da conta mestre
+         * @description Lido do contrato por simulação: cada lote com o teto, o preço (centavos) e quantos já foram mintados.
+         */
+        get: operations["getLots"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -788,6 +841,28 @@ export interface components {
             hashes?: {
                 [key: string]: string | null;
             };
+        };
+        Lot: {
+            /** @description A partir de 1 — o mesmo do campo `_lot`. */
+            number: number;
+            cap: number;
+            /** @description Centavos. */
+            price: number;
+            minted: number;
+        };
+        LotSchedule: {
+            success: boolean;
+            collection: string;
+            /** @description A conta mestre dona do cronograma. */
+            minter?: string;
+            contractId?: string;
+            lots: components["schemas"]["Lot"][];
+            /** @description A chain já tinha esta lista; nada foi submetido. */
+            alreadyDefined?: boolean;
+            /** @description Lotes acrescentados nesta chamada. */
+            added?: number;
+            /** @description Hash do `define_lots`, quando houve transação. */
+            hash?: string;
         };
         TransferResult: {
             success?: boolean;
@@ -2262,7 +2337,7 @@ export interface operations {
                     /** @description A mesma chave que o banco do sistema consumidor guarda. */
                     uuids: string[];
                     name: string;
-                    /** @description Campos livres, até 16, gravados no contrato. */
+                    /** @description Campos livres, até 16, gravados no contrato. `_collection` e `_lot` marcam o mint de um lote; outros `_` são recusados. */
                     fields?: {
                         [key: string]: string;
                     };
@@ -2308,7 +2383,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description `NO_GRANT`; `UUID_TAKEN` (parte do lote já existe, ou o item é de outro dono); `UUID_PENDING` (tentativa anterior ainda em voo — repita em instantes). */
+            /** @description `NO_GRANT`; `UUID_TAKEN` (parte do lote já existe, ou o item é de outro dono); `UUID_PENDING` (tentativa anterior ainda em voo — repita em instantes); `LOT_CAP_EXCEEDED`, `LOT_NOT_FOUND` ou `LOTS_UNSUPPORTED` (ledger sem lotes). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2328,6 +2403,150 @@ export interface operations {
             };
             /** @description `FEE_CAP`, `NO_CHANNEL_AVAILABLE` ou `CONTRACT_BUSY` (fila de escrita do contrato cheia — ~1 escrita por ledger): temporário. */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    defineLots: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description No MintVRS, o id do tipo de chave. */
+                    collection: string;
+                    lots: {
+                        cap: number;
+                        /** @description Centavos. */
+                        price: number;
+                    }[];
+                };
+            };
+        };
+        responses: {
+            /** @description Cronograma registrado, ou já igual na chain. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LotSchedule"];
+                };
+            };
+            /** @description `INVALID_PARAMS`, `LOTS_INVALID` ou `LOT_PRICE_DECREASING`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Falha. `errorCode` é estável e serve para o cliente decidir. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description `QUOTA_EXCEEDED`: cada registro consome 1 da cota. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description `LOTS_DISABLED`: superfície desligada (`LEDGER_LOTS_ENABLED`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description `NO_GRANT`, `LOT_SCHEDULE_CONFLICT` ou `LOTS_UNSUPPORTED` (ledger anterior à v3). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Falha. `errorCode` é estável e serve para o cliente decidir. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Falha. `errorCode` é estável e serve para o cliente decidir. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getLots: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                collection: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cronograma (vazio se a coleção não tem). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LotSchedule"];
+                };
+            };
+            /** @description Falha. `errorCode` é estável e serve para o cliente decidir. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description `LOTS_DISABLED`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description `NO_MASTER` ou `LOTS_UNSUPPORTED`. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

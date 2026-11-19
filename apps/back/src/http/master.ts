@@ -101,6 +101,61 @@ async function controlsMaster(
   return Boolean(options.setup) && features.panelMasterAdmin;
 }
 
+/** Erros de lote do demo-ledger v3 (6111–6117). */
+interface LotError {
+  code: string;
+  status: 400 | 409;
+  message: string;
+}
+const LOT_ERRORS = {
+  6111: { code: 'LOTS_INVALID', status: 400, message: 'cronograma inválido: de 1 a 20 lotes, nenhum com teto zero' },
+  6112: { code: 'LOT_PRICE_DECREASING', status: 400, message: 'um lote não pode custar menos que o anterior' },
+  6113: {
+    code: 'LOT_SCHEDULE_CONFLICT',
+    status: 409,
+    message: 'o cronograma on-chain já tem outros lotes; só dá para acrescentar lotes no fim',
+  },
+  6114: { code: 'LOT_NOT_FOUND', status: 409, message: 'a coleção não tem esse lote on-chain; registre o cronograma antes' },
+  6115: { code: 'LOT_CAP_EXCEEDED', status: 409, message: 'o mint passaria do teto do lote' },
+  6116: { code: 'LOT_TAG_INVALID', status: 400, message: '_collection e _lot vão juntos; _lot é o número do lote, de 1 a 20' },
+  6117: { code: 'RESERVED_FIELD', status: 400, message: 'campos começando com _ são do contrato (só _collection e _lot)' },
+} satisfies Record<number, LotError>;
+
+const MAX_LOTS = 20;
+const MAX_COLLECTION_LEN = 64;
+const LOT_FIELDS = new Set(['_collection', '_lot']);
+
+/** Ledgers já vistos com `version() >= 3`; o wasm só muda por upgrade. */
+const lotsReady = new Set<string>();
+
+/**
+ * Barra lote quando a superfície está desligada ou o ledger não tem lotes. Sem
+ * isto, um ledger v2 gravaria `_lot` como campo comum e mintaria sem teto.
+ */
+async function lotsGate(c: Context, contractId: string) {
+  if (!features.ledgerLots) {
+    return c.json(
+      { success: false, error: 'lotes desligados nesta instância (LEDGER_LOTS_ENABLED)', errorCode: 'LOTS_DISABLED' },
+      404,
+    );
+  }
+  if (!lotsReady.has(contractId)) {
+    const version = await ledger.contractVersion(contractId);
+    if (version < 3) {
+      return c.json(
+        {
+          success: false,
+          error: `o ledger ${contractId} é v${version} e não tem lotes; falta o upgrade para a v3`,
+          errorCode: 'LOTS_UNSUPPORTED',
+        },
+        409,
+      );
+    }
+    lotsReady.add(contractId);
+  }
+  return null;
+}
+
 /** Erro on-chain → resposta. FEE_CAP e falta de channel são temporários. */
 function onchainFailure(c: Context, error: unknown, quotaMessage: string) {
   const message = error instanceof Error ? error.message : String(error);
@@ -112,6 +167,12 @@ function onchainFailure(c: Context, error: unknown, quotaMessage: string) {
   }
   if (error instanceof ContractBusyError) {
     return c.json({ success: false, error: message, errorCode: 'CONTRACT_BUSY' }, 503);
+  }
+  const lotError = (LOT_ERRORS as Record<number, LotError | undefined>)[
+    Number(/#(611[1-7])\b/.exec(message)?.[1])
+  ];
+  if (lotError) {
+    return c.json({ success: false, error: lotError.message, errorCode: lotError.code }, lotError.status);
   }
   // 6200 é QuotaExceeded na mint-quota-policy.
   if (message.includes('6200')) {
@@ -565,6 +626,14 @@ masterRoutes.post('/ledger/mint', requireService(), async (c) => {
 
   const contractId = env.DEMO_LEDGER_CONTRACT_ID;
   const fields = Object.entries(body.fields ?? {});
+  const reserved = fields.map(([key]) => key).filter((key) => key.startsWith('_'));
+  if (reserved.some((key) => !LOT_FIELDS.has(key))) {
+    return c.json({ success: false, error: LOT_ERRORS[6117].message, errorCode: 'RESERVED_FIELD' }, 400);
+  }
+  if (reserved.length > 0) {
+    const blocked = await lotsGate(c, contractId);
+    if (blocked) return blocked;
+  }
   const payloadOf = (uuid: string) =>
     master.buildPayload('mint', {
       uuid,
@@ -752,6 +821,121 @@ function alreadyMinted(uuids: string[], known: Map<string, master.MintEntry>) {
 }
 
 /** Venda do marketplace: passa a posse de um item. Server-to-server. */
+/**
+ * Registra ou estende o cronograma de lotes de uma coleção (no MintVRS, um
+ * tipo de chave). Server-to-server.
+ *
+ * Idempotente: a lista é conferida com a chain antes. Igual → 200 sem
+ * transação; prefixo da chain + lotes novos → `define_lots`; qualquer outra
+ * coisa → 409 com o cronograma que está lá.
+ */
+masterRoutes.post('/ledger/lots', requireService(), async (c) => {
+  const { appId } = c.get('caller');
+  const body = await c.req.json<{ collection?: string; lots?: Array<{ cap?: unknown; price?: unknown }> }>();
+  const contractId = env.DEMO_LEDGER_CONTRACT_ID;
+
+  const collection = (body.collection ?? '').trim();
+  if (!collection || collection.length > MAX_COLLECTION_LEN) {
+    return c.json(
+      { success: false, error: `collection é obrigatória (até ${MAX_COLLECTION_LEN} caracteres)`, errorCode: 'INVALID_PARAMS' },
+      400,
+    );
+  }
+  const raw = Array.isArray(body.lots) ? body.lots : [];
+  const specs = raw.map((lot) => ({ cap: Number(lot?.cap), price: Number(lot?.price) }));
+  if (
+    specs.length === 0 ||
+    specs.length > MAX_LOTS ||
+    specs.some(
+      (s) =>
+        !Number.isInteger(s.cap) || s.cap < 1 || s.cap > 0xffffffff ||
+        !Number.isSafeInteger(s.price) || s.price < 0,
+    )
+  ) {
+    return c.json(
+      {
+        success: false,
+        error: `lots: de 1 a ${MAX_LOTS} itens {cap: inteiro >= 1, price: centavos inteiros >= 0}`,
+        errorCode: 'LOTS_INVALID',
+      },
+      400,
+    );
+  }
+  if (specs.some((s, idx) => idx > 0 && s.price < specs[idx - 1]!.price)) {
+    return c.json({ success: false, error: LOT_ERRORS[6112].message, errorCode: 'LOT_PRICE_DECREASING' }, 400);
+  }
+
+  // Depois da validação, que não custa nada: o portão lê a versão na chain.
+  const blocked = await lotsGate(c, contractId);
+  if (blocked) return blocked;
+
+  const context = await requireGrant(appId, 'ledger');
+  if (!context) {
+    return c.json(
+      { success: false, error: 'o tenant ainda não concedeu permissão de mint a este serviço', errorCode: 'NO_GRANT' },
+      409,
+    );
+  }
+
+  const onChain = await ledger.lotsOf(contractId, context.masterAccount, collection);
+  const extendsChain =
+    onChain.length <= specs.length &&
+    onChain.every((lot, idx) => lot.cap === specs[idx]?.cap && lot.price === specs[idx]?.price);
+  if (!extendsChain) {
+    return c.json(
+      { success: false, error: LOT_ERRORS[6113].message, errorCode: 'LOT_SCHEDULE_CONFLICT', lots: onChain },
+      409,
+    );
+  }
+  if (onChain.length === specs.length) {
+    return c.json({ success: true, alreadyDefined: true, collection, minter: context.masterAccount, lots: onChain });
+  }
+
+  try {
+    const result = await writeAsMaster({
+      appId,
+      masterAccount: context.masterAccount,
+      contractId,
+      fn: 'define_lots',
+      args: [
+        new Address(context.masterAccount).toScVal(),
+        nativeToScVal(collection, { type: 'string' }),
+        ledger.lotSpecsScVal(specs),
+      ],
+      contextRuleId: context.grant.contextRuleId!,
+    });
+    const lots = await ledger.lotsOf(contractId, context.masterAccount, collection);
+    logger.info({ appId, collection, lots: lots.length, hash: result.hash }, 'cronograma de lotes registrado');
+    return c.json({
+      success: true,
+      alreadyDefined: false,
+      collection,
+      minter: context.masterAccount,
+      lots,
+      added: specs.length - onChain.length,
+      hash: result.hash,
+    });
+  } catch (error) {
+    return onchainFailure(c, error, 'a cota concedida pelo tenant acabou');
+  }
+});
+
+/** Cronograma on-chain de uma coleção da conta mestre, com o mintado de cada lote. */
+masterRoutes.get('/ledger/lots/:collection', requireCaller(), async (c) => {
+  const { appId } = c.get('caller');
+  const contractId = env.DEMO_LEDGER_CONTRACT_ID;
+  const blocked = await lotsGate(c, contractId);
+  if (blocked) return blocked;
+
+  const masterAccount = await master.masterAccountOf(appId);
+  if (!masterAccount) {
+    return c.json({ success: false, error: 'o app ainda não tem conta mestre', errorCode: 'NO_MASTER' }, 409);
+  }
+  const collection = c.req.param('collection');
+  const lots = await ledger.lotsOf(contractId, masterAccount, collection);
+  return c.json({ success: true, collection, minter: masterAccount, contractId, lots });
+});
+
 masterRoutes.post('/ledger/transfer', requireService(), async (c) => {
   const { appId } = c.get('caller');
   const { uuid, to, metadata } = await c.req.json<{

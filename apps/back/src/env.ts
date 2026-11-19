@@ -144,6 +144,12 @@ const schema = z
     PANEL_MASTER_ADMIN: z.string().optional(),
     /** Deploy de conta patrocinado pelo relay. */
     BOOTSTRAP_ALLOW_DEPLOY: z.string().optional(),
+    /**
+     * Lotes do demo-ledger v3 (`/v1/ledger/lots` e mint com `_collection`/`_lot`).
+     * Mesmo ligada, as rotas conferem `version()` do contrato: num ledger v2 o
+     * `_lot` seria gravado como campo comum, sem teto nenhum.
+     */
+    LEDGER_LOTS_ENABLED: z.string().optional(),
 
     /**
      * Teto de fee de uma transação assinada pela conta mestre, em stroops. Sem
@@ -267,4 +273,5 @@ export const features = {
   accountSelfRegistration: flag(env.ACCOUNT_SELF_REGISTRATION),
   panelMasterAdmin: flag(env.PANEL_MASTER_ADMIN),
   allowDeploy: flag(env.BOOTSTRAP_ALLOW_DEPLOY),
+  ledgerLots: flag(env.LEDGER_LOTS_ENABLED),
 } as const;

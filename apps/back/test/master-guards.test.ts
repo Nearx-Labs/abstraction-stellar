@@ -271,3 +271,46 @@ describe('provisionamento e channels', () => {
     expect(Date.now() - started).toBeGreaterThanOrEqual(550);
   });
 });
+
+describe('lotes (ledger v3): o que é recusado antes da chain', () => {
+  it('campo reservado que não é de lote: 400 RESERVED_FIELD', async () => {
+    const res = await call(
+      'POST',
+      '/v1/ledger/mint',
+      { sk: secretKey },
+      { uuids: [randomUUID()], name: 'Chave', fields: { _price: '100' } },
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).errorCode).toBe('RESERVED_FIELD');
+  });
+
+  it('registrar cronograma exige a secret key', async () => {
+    const res = await call('POST', '/v1/ledger/lots', {}, { collection: 'c', lots: [{ cap: 1, price: 1 }] });
+    expect(res.status).toBe(401);
+  });
+
+  it('cronograma vazio, teto zero ou preço quebrado: 400 LOTS_INVALID', async () => {
+    for (const lots of [[], [{ cap: 0, price: 100 }], [{ cap: 2, price: 1.5 }], [{ cap: 2, price: -1 }]]) {
+      const res = await call('POST', '/v1/ledger/lots', { sk: secretKey }, { collection: 'acc-1', lots });
+      expect(res.status, JSON.stringify(lots)).toBe(400);
+      expect((await res.json()).errorCode).toBe('LOTS_INVALID');
+    }
+  });
+
+  it('lote mais barato que o anterior: 400 LOT_PRICE_DECREASING', async () => {
+    const res = await call(
+      'POST',
+      '/v1/ledger/lots',
+      { sk: secretKey },
+      { collection: 'acc-1', lots: [{ cap: 2, price: 15600 }, { cap: 2, price: 12000 }] },
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).errorCode).toBe('LOT_PRICE_DECREASING');
+  });
+
+  it('sem coleção: 400 INVALID_PARAMS', async () => {
+    const res = await call('POST', '/v1/ledger/lots', { sk: secretKey }, { lots: [{ cap: 2, price: 1 }] });
+    expect(res.status).toBe(400);
+    expect((await res.json()).errorCode).toBe('INVALID_PARAMS');
+  });
+});

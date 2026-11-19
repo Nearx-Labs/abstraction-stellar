@@ -33,6 +33,25 @@
 //! e o mint legítimo falhava com `UuidTaken`. Por isso só minta quem está na
 //! allowlist, mantida pelo `registrar` (a chave operacional do serviço). O
 //! `admin` (chave fria) troca o registrar e faz upgrade do wasm.
+//!
+//! ## Lotes (v3)
+//!
+//! Venda por lotes, como ingresso: a coleção (no MintVRS, o tipo de chave de
+//! uma campanha) tem um cronograma `[{cap, price}, …]`, com o preço nunca
+//! caindo de um lote para o seguinte. O cronograma é do minter
+//! (`Lots(minter, collection)`) e só cresce: `define_lots` repetido com a mesma
+//! lista não faz nada, uma lista maior acrescenta lotes no fim, e qualquer
+//! outra coisa é `LotScheduleConflict` — lote já anunciado não muda de teto nem
+//! de preço.
+//!
+//! O mint por lote é o próprio `mint`/`mint_batch`, com dois campos reservados:
+//! `_collection` e `_lot` (número do lote, a partir de 1). Com eles, o contrato
+//! confere o teto do lote e conta os itens; sem eles, nada muda. Ficar no
+//! `mint_batch` é de propósito: a mint-quota-policy já cobra um item por UUID
+//! nessa função, e uma função nova seria cobrada como 1 — um lote de 10 gastaria
+//! 1 da cota.
+//!
+//! Campo começando com `_` é do contrato: fora os dois acima, é recusado.
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, panic_with_error, Address,
     BytesN, Env, Map, String, Vec,
@@ -66,6 +85,16 @@ pub const MAX_BATCH: u32 = 10;
 pub const MAX_PAGE: u32 = 50;
 /// Teto de `page`: cada item lê 2 entradas (posição global e registro).
 pub const MAX_RECORD_PAGE: u32 = 40;
+/// Lotes por coleção. O cronograma inteiro é uma entrada só, lida e regravada a
+/// cada mint de lote; 20 lotes são ~1 KB.
+pub const MAX_LOTS: u32 = 20;
+/// Tamanho do identificador da coleção (no MintVRS, um UUID de 36).
+pub const MAX_COLLECTION_LEN: u32 = 64;
+/// Campos reservados do mint por lote.
+pub const FIELD_COLLECTION: &str = "_collection";
+pub const FIELD_LOT: &str = "_lot";
+/// Versão do contrato, para quem precisa saber se o wasm já tem lotes.
+pub const VERSION: u32 = 3;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -88,6 +117,22 @@ pub enum LedgerError {
     SelfTransfer = 6109,
     /// A conta não está na allowlist de quem pode mintar.
     NotMinter = 6110,
+    /// Cronograma vazio, acima de MAX_LOTS ou com lote de teto zero.
+    LotsInvalid = 6111,
+    /// Um lote mais barato que o anterior.
+    LotPriceDecreasing = 6112,
+    /// A lista não estende o cronograma já gravado (lote anunciado mudou ou
+    /// sumiu).
+    LotScheduleConflict = 6113,
+    /// Coleção sem cronograma, ou número de lote fora dele.
+    LotNotFound = 6114,
+    /// O mint passaria do teto do lote.
+    LotCapExceeded = 6115,
+    /// Coleção vazia ou longa demais, `_lot` mal formado, ou só um dos dois
+    /// campos reservados.
+    LotTagInvalid = 6116,
+    /// Campo começando com `_` que não é `_collection` nem `_lot`.
+    ReservedField = 6117,
 }
 
 /// Um item do invent\u{e1}rio.
@@ -115,6 +160,24 @@ pub struct Record {
     pub owner_idx: u32,
 }
 
+/// Um lote como o minter anuncia: quantos itens e o preço unitário, em
+/// centavos.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LotSpec {
+    pub cap: u32,
+    pub price: u64,
+}
+
+/// Um lote gravado: o anúncio mais quantos itens já saíram dele.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Lot {
+    pub cap: u32,
+    pub price: u64,
+    pub minted: u32,
+}
+
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
@@ -134,6 +197,8 @@ pub enum DataKey {
     Registrar,
     /// Allowlist de minters (instance).
     Minter(Address),
+    /// (minter, coleção) -> cronograma de lotes (v3).
+    Lots(Address, String),
 }
 
 #[contractevent]
@@ -157,6 +222,36 @@ pub struct Transferred {
     #[topic]
     pub to: Address,
     pub transfers: u32,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LotsDefined {
+    #[topic]
+    pub minter: Address,
+    #[topic]
+    pub collection: String,
+    /// Lotes no cronograma depois desta chamada.
+    pub lots: u32,
+    /// Quantos foram acrescentados agora.
+    pub added: u32,
+    /// Soma dos tetos de todos os lotes.
+    pub total_cap: u32,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LotMinted {
+    #[topic]
+    pub minter: Address,
+    #[topic]
+    pub collection: String,
+    pub lot: u32,
+    pub count: u32,
+    /// Itens do lote mintados até aqui, contando esta chamada.
+    pub minted: u32,
+    pub cap: u32,
+    pub price: u64,
 }
 
 #[contractevent]
@@ -261,6 +356,107 @@ fn require_minter(e: &Env, owner: &Address) {
     }
 }
 
+fn validate_collection(e: &Env, collection: &String) {
+    if collection.len() == 0 || collection.len() > MAX_COLLECTION_LEN {
+        panic_with_error!(e, LedgerError::LotTagInvalid);
+    }
+}
+
+/// Número do lote em `_lot`: decimal canônico (sem zero à esquerda), de 1 a
+/// MAX_LOTS. Um formato só, para todo item do mesmo lote carregar a mesma
+/// etiqueta.
+fn parse_lot_number(e: &Env, value: &String) -> u32 {
+    let len = value.len() as usize;
+    let mut buf = [0u8; 4];
+    if len == 0 || len > buf.len() {
+        panic_with_error!(e, LedgerError::LotTagInvalid);
+    }
+    value.copy_into_slice(&mut buf[..len]);
+    if buf[0] == b'0' {
+        panic_with_error!(e, LedgerError::LotTagInvalid);
+    }
+    let mut n: u32 = 0;
+    for &b in &buf[..len] {
+        if !b.is_ascii_digit() {
+            panic_with_error!(e, LedgerError::LotTagInvalid);
+        }
+        n = n * 10 + (b - b'0') as u32;
+    }
+    if n > MAX_LOTS {
+        panic_with_error!(e, LedgerError::LotTagInvalid);
+    }
+    n
+}
+
+/// Lê os campos reservados. `None` = mint fora de lote. Roda depois de
+/// `validate_metadata`, que já garante chave de 1 a MAX_KEY_LEN bytes.
+fn lot_tag(e: &Env, fields: &Map<String, String>) -> Option<(String, u32)> {
+    let collection_key = String::from_str(e, FIELD_COLLECTION);
+    let lot_key = String::from_str(e, FIELD_LOT);
+
+    let mut buf = [0u8; MAX_KEY_LEN as usize];
+    for key in fields.keys().iter() {
+        let len = key.len() as usize;
+        key.copy_into_slice(&mut buf[..len]);
+        if buf[0] == b'_' && key != collection_key && key != lot_key {
+            panic_with_error!(e, LedgerError::ReservedField);
+        }
+    }
+
+    match (fields.get(collection_key), fields.get(lot_key)) {
+        (None, None) => None,
+        (Some(collection), Some(lot)) => {
+            validate_collection(e, &collection);
+            Some((collection, parse_lot_number(e, &lot)))
+        }
+        _ => panic_with_error!(e, LedgerError::LotTagInvalid),
+    }
+}
+
+fn read_lots(e: &Env, minter: &Address, collection: &String) -> Option<Vec<Lot>> {
+    e.storage()
+        .persistent()
+        .get(&DataKey::Lots(minter.clone(), collection.clone()))
+}
+
+/// Desconta `count` itens do lote, ou recusa a chamada inteira.
+fn consume_lot(e: &Env, minter: &Address, collection: String, number: u32, count: u32) {
+    let mut lots = read_lots(e, minter, &collection)
+        .unwrap_or_else(|| panic_with_error!(e, LedgerError::LotNotFound));
+    let idx = number - 1;
+    let mut lot = lots
+        .get(idx)
+        .unwrap_or_else(|| panic_with_error!(e, LedgerError::LotNotFound));
+
+    let minted = lot.minted.saturating_add(count);
+    if minted > lot.cap {
+        panic_with_error!(e, LedgerError::LotCapExceeded);
+    }
+    lot.minted = minted;
+    lots.set(idx, lot.clone());
+    set_persistent(e, &DataKey::Lots(minter.clone(), collection.clone()), &lots);
+
+    LotMinted {
+        minter: minter.clone(),
+        collection,
+        lot: number,
+        count,
+        minted,
+        cap: lot.cap,
+        price: lot.price,
+    }
+    .publish(e);
+}
+
+/// Validação comum a `mint` e `mint_batch`: metadados, campos reservados e,
+/// se for mint de lote, o teto.
+fn check_mint(e: &Env, owner: &Address, name: &String, uri: &String, fields: &Map<String, String>, count: u32) {
+    validate_metadata(e, name, uri, fields);
+    if let Some((collection, number)) = lot_tag(e, fields) {
+        consume_lot(e, owner, collection, number, count);
+    }
+}
+
 /// Minta `uuids` para `owner`. Lê e grava os contadores uma vez só por chamada:
 /// num lote, o que cresce por item são só as 3 entradas do próprio item.
 fn mint_many(
@@ -347,7 +543,7 @@ impl DemoLedger {
         fields: Map<String, String>,
     ) {
         require_minter(e, &owner);
-        validate_metadata(e, &name, &uri, &fields);
+        check_mint(e, &owner, &name, &uri, &fields, 1);
         let mut one = Vec::new(e);
         one.push_back(uuid);
         mint_many(e, &owner, &one, &name, &uri, &fields);
@@ -371,9 +567,83 @@ impl DemoLedger {
         if uuids.len() == 0 || uuids.len() > MAX_BATCH {
             panic_with_error!(e, LedgerError::BatchInvalid);
         }
-        validate_metadata(e, &name, &uri, &fields);
+        check_mint(e, &owner, &name, &uri, &fields, uuids.len());
         mint_many(e, &owner, &uuids, &name, &uri, &fields);
         uuids.len()
+    }
+
+    /// Grava ou estende o cronograma de lotes de uma coleção do `owner`.
+    ///
+    /// Só acrescenta: a lista tem de começar com os lotes já gravados, iguais
+    /// em teto e preço. Repetir a mesma lista é no-op (o retry do serviço
+    /// converge), e o preço nunca cai de um lote para o seguinte. Devolve
+    /// quantos lotes o cronograma tem.
+    pub fn define_lots(e: &Env, owner: Address, collection: String, specs: Vec<LotSpec>) -> u32 {
+        require_minter(e, &owner);
+        validate_collection(e, &collection);
+        if specs.len() == 0 || specs.len() > MAX_LOTS {
+            panic_with_error!(e, LedgerError::LotsInvalid);
+        }
+
+        let mut lots = read_lots(e, &owner, &collection).unwrap_or(Vec::new(e));
+        let existing = lots.len();
+        if specs.len() < existing {
+            panic_with_error!(e, LedgerError::LotScheduleConflict);
+        }
+        for (idx, lot) in lots.iter().enumerate() {
+            let spec = specs.get(idx as u32).unwrap();
+            if spec.cap != lot.cap || spec.price != lot.price {
+                panic_with_error!(e, LedgerError::LotScheduleConflict);
+            }
+        }
+        if specs.len() == existing {
+            return existing;
+        }
+
+        let mut last_price = lots.last().map(|l| l.price);
+        for idx in existing..specs.len() {
+            let spec = specs.get(idx).unwrap();
+            if spec.cap == 0 {
+                panic_with_error!(e, LedgerError::LotsInvalid);
+            }
+            if let Some(previous) = last_price {
+                if spec.price < previous {
+                    panic_with_error!(e, LedgerError::LotPriceDecreasing);
+                }
+            }
+            last_price = Some(spec.price);
+            lots.push_back(Lot {
+                cap: spec.cap,
+                price: spec.price,
+                minted: 0,
+            });
+        }
+
+        set_persistent(e, &DataKey::Lots(owner.clone(), collection.clone()), &lots);
+        extend_instance(e);
+
+        let mut total_cap: u32 = 0;
+        for lot in lots.iter() {
+            total_cap = total_cap.saturating_add(lot.cap);
+        }
+        LotsDefined {
+            minter: owner,
+            collection,
+            lots: lots.len(),
+            added: lots.len() - existing,
+            total_cap,
+        }
+        .publish(e);
+        lots.len()
+    }
+
+    /// Cronograma de uma coleção, com o mintado de cada lote. Vazio se não há.
+    pub fn lots(e: &Env, owner: Address, collection: String) -> Vec<Lot> {
+        read_lots(e, &owner, &collection).unwrap_or(Vec::new(e))
+    }
+
+    pub fn version(_e: &Env) -> u32 {
+        VERSION
     }
 
     /// Passa a posse de um item. É a venda do marketplace.

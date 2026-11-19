@@ -298,6 +298,11 @@ export class AbstractionClient {
       name: string;
       fields?: Record<string, string>;
       metadata?: Record<string, unknown>;
+      /**
+       * Mint de um lote (ledger v3): vira os campos reservados `_collection` e
+       * `_lot`, e o contrato recusa o que passar do teto do lote.
+       */
+      lot?: LotRef;
     }): Promise<Ok<paths['/v1/ledger/mint']['post']>> => {
       if (input.uuids.length === 0 || input.uuids.length > MAX_BATCH) {
         throw new AbstractionError(
@@ -306,8 +311,27 @@ export class AbstractionClient {
           0,
         );
       }
-      return this.request('POST', '/v1/ledger/mint', input);
+      const { lot, ...body } = input;
+      return this.request('POST', '/v1/ledger/mint', {
+        ...body,
+        fields: lot ? { ...body.fields, ...lotFields(lot) } : body.fields,
+      });
     },
+
+    /**
+     * Registra ou estende o cronograma de lotes de uma coleção (ledger v3).
+     * Idempotente: a mesma lista volta `alreadyDefined` sem transação; só dá
+     * para acrescentar lotes no fim.
+     */
+    defineLots: (input: {
+      collection: string;
+      lots: Array<{ cap: number; price: number }>;
+    }): Promise<Ok<paths['/v1/ledger/lots']['post']>> =>
+      this.request('POST', '/v1/ledger/lots', input),
+
+    /** Cronograma on-chain de uma coleção, com o mintado de cada lote. */
+    lots: (collection: string): Promise<Ok<paths['/v1/ledger/lots/{collection}']['get']>> =>
+      this.request('GET', `/v1/ledger/lots/${encodeURIComponent(collection)}`),
 
     /** A venda: passa a posse de um item. */
     transfer: (input: {
@@ -378,6 +402,8 @@ export class AbstractionClient {
     name: string;
     fields?: Record<string, string>;
     metadata?: Record<string, unknown>;
+    /** Todos os itens no mesmo lote (ledger v3). */
+    lot?: LotRef;
     onProgress?: (progress: { minted: number; total: number; hash: string }) => void;
   }): Promise<{
     minted: string[];
@@ -394,6 +420,7 @@ export class AbstractionClient {
           uuids: chunk,
           name: input.name,
           fields: input.fields,
+          lot: input.lot,
           metadata: input.metadata,
         });
         minted.push(...chunk);
@@ -408,7 +435,7 @@ export class AbstractionClient {
         failed.push({ uuids: chunk, error });
         // Cota esgotada não melhora com insistência: os lotes seguintes
         // falhariam igual, queimando tempo.
-        if (error.code === 'QUOTA_EXCEEDED') break;
+        if (error.code === 'QUOTA_EXCEEDED' || error.code === 'LOT_CAP_EXCEEDED') break;
       }
     }
 
@@ -419,6 +446,16 @@ export class AbstractionClient {
   health(): Promise<Ok<paths['/health/ready']['get']>> {
     return this.request('GET', '/health/ready');
   }
+}
+
+/** Lote de um mint: a coleção e o número do lote, a partir de 1. */
+export interface LotRef {
+  collection: string;
+  number: number;
+}
+
+function lotFields(lot: LotRef): Record<string, string> {
+  return { _collection: lot.collection, _lot: String(lot.number) };
 }
 
 /** Itens por transação, espelhando `MAX_BATCH` do contrato demo-ledger. */

@@ -162,3 +162,41 @@ describe('tipos vindos da spec', () => {
     expect(record.minter).not.toBe(record.owner);
   });
 });
+
+describe('lotes (ledger v3)', () => {
+  it('mint com lot vira os campos reservados, sem perder os outros', async () => {
+    const { client, calls } = stub([{ body: { success: true, minted: 1, uuids: ['a'], hash: 'h' } }]);
+    await client.ledger.mint({
+      uuids: ['a'],
+      name: 'Chave',
+      fields: { campaignId: 'c-1' },
+      lot: { collection: 'acc-1', number: 2 },
+    });
+    expect(calls[0]!.body).toEqual({
+      uuids: ['a'],
+      name: 'Chave',
+      fields: { campaignId: 'c-1', _collection: 'acc-1', _lot: '2' },
+    });
+  });
+
+  it('defineLots e lots batem nas rotas certas', async () => {
+    const { client, calls } = stub([
+      { body: { success: true, collection: 'acc 1', lots: [] } },
+      { body: { success: true, collection: 'acc 1', lots: [] } },
+    ]);
+    await client.ledger.defineLots({ collection: 'acc 1', lots: [{ cap: 3, price: 12000 }] });
+    await client.ledger.lots('acc 1');
+    expect(calls[0]).toMatchObject({ method: 'POST', url: 'https://api.local/v1/ledger/lots' });
+    expect(calls[1]!.url).toBe('https://api.local/v1/ledger/lots/acc%201');
+  });
+
+  it('mintAll para no primeiro lote recusado por teto', async () => {
+    const { client, fetchStub } = stub([
+      { status: 409, body: { success: false, error: 'teto', errorCode: 'LOT_CAP_EXCEEDED' } },
+    ]);
+    const uuids = Array.from({ length: MAX_BATCH * 3 }, (_, i) => `u${i}`);
+    const result = await client.mintAll({ uuids, name: 'X', lot: { collection: 'acc-1', number: 1 } });
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    expect(result.failed[0]!.error.code).toBe('LOT_CAP_EXCEEDED');
+  });
+});

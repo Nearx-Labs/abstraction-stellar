@@ -1931,7 +1931,7 @@
           "ledger"
         ],
         "summary": "Minta um lote como a conta mestre",
-        "description": "Até 10 UUIDs por chamada — é o limite de escritas de uma transação\nSoroban: cada item grava 3 entradas no contrato.\n\nA cota concedida pelo tenant conta ITENS: um lote de 10 desconta 10, e\num lote maior que o teto é recusado inteiro.\n\n**Idempotente por UUID.** Repetir um lote já mintado devolve 200 com\n`alreadyMinted: true` e o hash original, sem nova transação. Um UUID cuja\ntentativa anterior falhou (ou travou) é conferido na chain: se o item já\né da mestre, a linha é confirmada; se não existe, a tentativa é refeita\nreaproveitando a linha.",
+        "description": "Até 10 UUIDs por chamada — é o limite de escritas de uma transação\nSoroban: cada item grava 3 entradas no contrato.\n\nA cota concedida pelo tenant conta ITENS: um lote de 10 desconta 10, e\num lote maior que o teto é recusado inteiro.\n\n**Idempotente por UUID.** Repetir um lote já mintado devolve 200 com\n`alreadyMinted: true` e o hash original, sem nova transação. Um UUID cuja\ntentativa anterior falhou (ou travou) é conferido na chain: se o item já\né da mestre, a linha é confirmada; se não existe, a tentativa é refeita\nreaproveitando a linha.\n\n**Lotes (ledger v3).** Com `fields._collection` (a coleção) e `fields._lot`\n(número do lote, a partir de 1), o contrato confere o teto do lote no\ncronograma registrado por `POST /v1/ledger/lots` e recusa o lote inteiro se\npassar (`LOT_CAP_EXCEEDED`). Outros campos começando com `_` são recusados.",
         "security": [
           {
             "secretKey": []
@@ -1966,7 +1966,7 @@
                     "additionalProperties": {
                       "type": "string"
                     },
-                    "description": "Campos livres, até 16, gravados no contrato."
+                    "description": "Campos livres, até 16, gravados no contrato. `_collection` e `_lot` marcam o mint de um lote; outros `_` são recusados."
                   },
                   "metadata": {
                     "type": "object",
@@ -2019,7 +2019,7 @@
             }
           },
           "409": {
-            "description": "`NO_GRANT`; `UUID_TAKEN` (parte do lote já existe, ou o item é de outro dono); `UUID_PENDING` (tentativa anterior ainda em voo — repita em instantes).",
+            "description": "`NO_GRANT`; `UUID_TAKEN` (parte do lote já existe, ou o item é de outro dono); `UUID_PENDING` (tentativa anterior ainda em voo — repita em instantes); `LOT_CAP_EXCEEDED`, `LOT_NOT_FOUND` ou `LOTS_UNSUPPORTED` (ledger sem lotes).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2040,6 +2040,217 @@
           },
           "503": {
             "description": "`FEE_CAP`, `NO_CHANNEL_AVAILABLE` ou `CONTRACT_BUSY` (fila de escrita do contrato cheia — ~1 escrita por ledger): temporário.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ledger/lots": {
+      "post": {
+        "operationId": "defineLots",
+        "tags": [
+          "ledger"
+        ],
+        "summary": "Registra ou estende o cronograma de lotes de uma coleção",
+        "description": "Venda por lotes, como ingresso: cada lote tem teto (`cap`) e preço em\ncentavos, e o preço nunca cai de um lote para o seguinte. O cronograma fica\nno ledger (v3), por conta mestre e coleção, e o mint com `_collection`/`_lot`\nrespeita o teto de cada lote.\n\n**Só acrescenta e é idempotente.** A lista é conferida com a chain antes:\nigual → 200 com `alreadyDefined: true` e nenhuma transação; os lotes\non-chain + novos no fim → transação; qualquer outra coisa (lote anunciado\nmudou ou sumiu) → 409 `LOT_SCHEDULE_CONFLICT` com o cronograma atual.",
+        "security": [
+          {
+            "secretKey": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "collection",
+                  "lots"
+                ],
+                "properties": {
+                  "collection": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "description": "No MintVRS, o id do tipo de chave."
+                  },
+                  "lots": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 20,
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "cap",
+                        "price"
+                      ],
+                      "properties": {
+                        "cap": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "price": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "description": "Centavos."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Cronograma registrado, ou já igual na chain.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LotSchedule"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`INVALID_PARAMS`, `LOTS_INVALID` ou `LOT_PRICE_DECREASING`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`QUOTA_EXCEEDED`: cada registro consome 1 da cota.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`LOTS_DISABLED`: superfície desligada (`LEDGER_LOTS_ENABLED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`NO_GRANT`, `LOT_SCHEDULE_CONFLICT` ou `LOTS_UNSUPPORTED` (ledger anterior à v3).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ledger/lots/{collection}": {
+      "get": {
+        "operationId": "getLots",
+        "tags": [
+          "ledger"
+        ],
+        "summary": "Cronograma on-chain de uma coleção da conta mestre",
+        "description": "Lido do contrato por simulação: cada lote com o teto, o preço (centavos) e quantos já foram mintados.",
+        "parameters": [
+          {
+            "name": "collection",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "secretKey": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cronograma (vazio se a coleção não tem).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LotSchedule"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Falha. `errorCode` é estável e serve para o cliente decidir.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`LOTS_DISABLED`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`NO_MASTER` ou `LOTS_UNSUPPORTED`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3239,6 +3450,72 @@
               ]
             },
             "description": "Em `alreadyMinted`: hash do mint de cada UUID."
+          }
+        }
+      },
+      "Lot": {
+        "type": "object",
+        "required": [
+          "number",
+          "cap",
+          "price",
+          "minted"
+        ],
+        "properties": {
+          "number": {
+            "type": "integer",
+            "description": "A partir de 1 — o mesmo do campo `_lot`."
+          },
+          "cap": {
+            "type": "integer"
+          },
+          "price": {
+            "type": "integer",
+            "description": "Centavos."
+          },
+          "minted": {
+            "type": "integer"
+          }
+        }
+      },
+      "LotSchedule": {
+        "type": "object",
+        "required": [
+          "success",
+          "collection",
+          "lots"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "collection": {
+            "type": "string"
+          },
+          "minter": {
+            "type": "string",
+            "description": "A conta mestre dona do cronograma."
+          },
+          "contractId": {
+            "type": "string"
+          },
+          "lots": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Lot"
+            }
+          },
+          "alreadyDefined": {
+            "type": "boolean",
+            "description": "A chain já tinha esta lista; nada foi submetido."
+          },
+          "added": {
+            "type": "integer",
+            "description": "Lotes acrescentados nesta chamada."
+          },
+          "hash": {
+            "type": "string",
+            "description": "Hash do `define_lots`, quando houve transação."
           }
         }
       },

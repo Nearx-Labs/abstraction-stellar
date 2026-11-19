@@ -153,3 +153,68 @@ export async function recordsOf(
   ])) as unknown[] | undefined;
   return Array.isArray(raw) ? raw.map(String) : [];
 }
+
+/** Um lote do cronograma on-chain (demo-ledger v3). `price` em centavos. */
+export interface LedgerLot {
+  /** Número do lote, a partir de 1 — o mesmo do campo `_lot`. */
+  number: number;
+  cap: number;
+  price: number;
+  minted: number;
+}
+
+/** O que o tenant anuncia: teto e preço (centavos) de cada lote. */
+export interface LotSpecInput {
+  cap: number;
+  price: number;
+}
+
+/**
+ * Versão do wasm do ledger. A v1/v2 não têm `version()`: a simulação falha e
+ * isso vira 2 — quem pergunta só quer saber se tem lotes (>= 3).
+ */
+export async function contractVersion(contractId: string): Promise<number> {
+  try {
+    const raw = await simulate(contractId, 'version', []);
+    return raw === undefined ? 2 : Number(raw);
+  } catch {
+    return 2;
+  }
+}
+
+/** Cronograma de uma coleção do minter; vazio se não há. */
+export async function lotsOf(
+  contractId: string,
+  minter: string,
+  collection: string,
+): Promise<LedgerLot[]> {
+  const raw = (await simulate(contractId, 'lots', [
+    new Address(minter).toScVal(),
+    nativeToScVal(collection, { type: 'string' }),
+  ])) as Array<{ cap: unknown; price: unknown; minted: unknown }> | undefined;
+  if (!Array.isArray(raw)) return [];
+  return raw.map((lot, idx) => ({
+    number: idx + 1,
+    cap: Number(lot.cap),
+    price: Number(lot.price),
+    minted: Number(lot.minted),
+  }));
+}
+
+/** `Vec<LotSpec>` do contrato: struct vira mapa de símbolos em ordem. */
+export function lotSpecsScVal(specs: LotSpecInput[]): xdr.ScVal {
+  return xdr.ScVal.scvVec(
+    specs.map((spec) =>
+      xdr.ScVal.scvMap([
+        new xdr.ScMapEntry({
+          key: xdr.ScVal.scvSymbol('cap'),
+          val: nativeToScVal(spec.cap, { type: 'u32' }),
+        }),
+        new xdr.ScMapEntry({
+          key: xdr.ScVal.scvSymbol('price'),
+          val: nativeToScVal(BigInt(spec.price), { type: 'u64' }),
+        }),
+      ]),
+    ),
+  );
+}
