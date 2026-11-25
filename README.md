@@ -416,6 +416,17 @@ Ambas produzem erros que não apontam para a causa, e as duas já morderam:
 - **Deploy com os wasm congelados.** `scripts/deploy-contracts.sh` confere o
   sha256 contra `contracts/RELEASE.sha256` e imprime as linhas de env. O que foi
   ensaiado na testnet é o que vai para a mainnet.
+- **Toolchain de release.** Os wasm de `contracts/RELEASE.sha256` saem de
+  `RUSTUP_TOOLCHAIN=1.95.0 stellar contract build` com o stellar CLI **27.0.0**
+  (`cargo install --locked stellar-cli@27.0.0`) e o target `wasm32v1-none` no
+  1.95.0. O CLI grava a própria versão no wasm: com outro CLI ou outro Rust o
+  hash muda. Reconstruir o commit de um release com esse par reproduz os seis
+  hashes bit a bit.
+- **Upgrade de ledger já deployado.** `scripts/upgrade-demo-ledger.sh` confere o
+  wasm contra o `RELEASE.sha256` e o `admin()` on-chain, sobe o código e simula;
+  só aplica com `--send`, e depois exige `version() == 3` com `total_supply` e o
+  primeiro registro intactos. O endereço do ledger não muda, então
+  `DEMO_LEDGER_CONTRACT_ID` continua o mesmo.
 - **Superfície mínima.** O MintVRS só usa secret key: na mainnet,
   `RELAY_ENABLED`, `FAUCET_ENABLED`, `ACCOUNT_SELF_REGISTRATION`,
   `PANEL_MASTER_ADMIN` e `BOOTSTRAP_ALLOW_DEPLOY` ficam desligados (é o padrão
